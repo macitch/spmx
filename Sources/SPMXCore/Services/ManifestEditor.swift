@@ -200,9 +200,9 @@ public struct ManifestEditor: @unchecked Sendable {
 
     // MARK: - State
 
-    private let tree: SourceFileSyntax
+    let tree: SourceFileSyntax
 
-    private init(tree: SourceFileSyntax) {
+    init(tree: SourceFileSyntax) {
         self.tree = tree
     }
 
@@ -231,160 +231,6 @@ public struct ManifestEditor: @unchecked Sendable {
         return ManifestEditor(tree: parsed)
     }
 
-    // MARK: - Inspection
-
-    /// Target names defined in the manifest, excluding test targets
-    /// (`.testTarget(...)`). Used by `AddCommand` to decide whether it can auto-pick
-    /// a target or needs to require `--target`.
-    ///
-    /// Returns targets in source order. If there's exactly one non-test target, the
-    /// command is safe to auto-pick it. Zero or two-plus → require `--target` (zero
-    /// means the manifest is a pure test or product bundle; two-plus means ambiguity).
-    ///
-    /// - Throws: `.noPackageInit`, `.targetsNotArrayLiteral` when the manifest shape
-    ///   is too unusual to reason about.
-    public func listNonTestTargets() throws -> [String] {
-        let packageCall = try findPackageCall()
-        guard let targetsArg = Self.argument(labeled: "targets", in: packageCall) else {
-            // No `targets:` argument at all — legal SPM, means zero targets. Return [].
-            return []
-        }
-        if Self.containsShallowIfConfig(targetsArg.expression) {
-            throw Error.conditionalTargets
-        }
-        guard let array = targetsArg.expression.as(ArrayExprSyntax.self) else {
-            throw Error.targetsNotArrayLiteral
-        }
-
-        var names: [String] = []
-        for element in array.elements {
-            guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self) else {
-                // Not a `.target(...)`-style call (could be a variable reference, a
-                // conditional expression, something weird). Skip it — we can't enumerate
-                // it but we don't want to refuse the whole read just because one slot is
-                // unusual. listNonTestTargets is an advisory read, not a safety check.
-                continue
-            }
-            let kind = member.declName.baseName.text
-            // Non-test target kinds we want to expose: target, executableTarget,
-            // macro, plugin, systemLibrary, binaryTarget. testTarget is the only
-            // one we deliberately exclude.
-            if kind == "testTarget" { continue }
-
-            // Extract the `name:` argument as a plain string literal.
-            guard let nameArg = Self.argument(labeled: "name", in: call),
-                  let nameValue = Self.plainStringLiteral(nameArg.expression) else {
-                continue
-            }
-            names.append(nameValue)
-        }
-        return names
-    }
-
-    /// Product declarations in the manifest's `products:` array.
-    ///
-    /// Returns `(name, kind)` pairs in source order. The kind is derived from the
-    /// member-access base name: `.library(…)` → `.library`, `.executable(…)` →
-    /// `.executable`, `.plugin(…)` → `.plugin`, anything else → `.other`.
-    ///
-    /// This is the SwiftSyntax-based alternative to `swift package dump-package` for
-    /// product discovery. It's faster (no subprocess), never hangs (dump-package can
-    /// trigger dependency resolution on packages with macros), and works offline.
-    ///
-    /// - Throws: `.noPackageInit` if there's no Package call.
-    public func listProducts() throws -> [(name: String, kind: ManifestFetcher.Metadata.Product.Kind)] {
-        let packageCall = try findPackageCall()
-        guard let productsArg = Self.argument(labeled: "products", in: packageCall) else {
-            return []
-        }
-        guard let array = productsArg.expression.as(ArrayExprSyntax.self) else {
-            // Non-literal products: — unusual but not something we need to refuse.
-            // Return empty; the caller will treat it as "no products found."
-            return []
-        }
-
-        var products: [(name: String, kind: ManifestFetcher.Metadata.Product.Kind)] = []
-        for element in array.elements {
-            guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  let nameArg = Self.argument(labeled: "name", in: call),
-                  let nameValue = Self.plainStringLiteral(nameArg.expression) else {
-                continue
-            }
-            let kindString = member.declName.baseName.text
-            let kind: ManifestFetcher.Metadata.Product.Kind
-            switch kindString {
-            case "library": kind = .library
-            case "executable", "executableProduct": kind = .executable
-            case "plugin": kind = .plugin
-            default: kind = .other
-            }
-            products.append((name: nameValue, kind: kind))
-        }
-        return products
-    }
-
-    /// Returns the SPM identity of every package in the top-level `dependencies:` array.
-    ///
-    /// For `.package(url:)` entries, identity is derived via
-    /// `XcodePackageReference.identity(forRepositoryURL:)`. For `.package(path:)` entries,
-    /// identity is the last path component, lowercased (matching SPM's convention for
-    /// local packages).
-    ///
-    /// Entries that don't match either shape (e.g. a future `.package(id:)` registry form)
-    /// are silently skipped rather than throwing.
-    ///
-    /// - Throws: `.noPackageInit`, `.dependenciesNotArrayLiteral` when the manifest
-    ///   shape is too unusual to reason about.
-    public func listDependencyIdentities() throws -> [String] {
-        let packageCall = try findPackageCall()
-        guard let depsArg = Self.argument(labeled: "dependencies", in: packageCall) else {
-            return []
-        }
-        if Self.containsIfConfig(depsArg.expression) {
-            throw Error.conditionalDependencies
-        }
-        guard let array = depsArg.expression.as(ArrayExprSyntax.self) else {
-            throw Error.dependenciesNotArrayLiteral
-        }
-
-        var identities: [String] = []
-        for element in array.elements {
-            guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package" else {
-                continue
-            }
-            // .package(url: "...", ...)
-            if let urlArg = Self.argument(labeled: "url", in: call),
-               let urlString = Self.plainStringLiteral(urlArg.expression) {
-                identities.append(XcodePackageReference.identity(forRepositoryURL: urlString))
-                continue
-            }
-            // .package(path: "...", ...)
-            if let pathArg = Self.argument(labeled: "path", in: call),
-               let pathString = Self.plainStringLiteral(pathArg.expression) {
-                let lastComponent = (pathString as NSString).lastPathComponent
-                identities.append(lastComponent.lowercased())
-                continue
-            }
-        }
-        return identities
-    }
-
-    /// Whether a package with the given SPM identity is already listed in the top-level
-    /// `dependencies:` array. Identity matching follows SPM's rule: URL last path
-    /// component, `.git` stripped, lowercased. Matching is done via
-    /// `XcodePackageReference.identity(forRepositoryURL:)` so there's only one copy
-    /// of the rule in the codebase.
-    ///
-    /// - Throws: `.noPackageInit`, `.dependenciesNotArrayLiteral` when the manifest
-    ///   shape is too unusual to reason about.
-    public func containsPackage(identity: String) throws -> Bool {
-        return try listDependencyIdentities().contains(identity.lowercased())
-    }
-
     // MARK: - SwiftSyntax helpers
 
     /// Locate the top-level `let package = Package(...)` call expression.
@@ -395,7 +241,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// `Package`, or `Package(...)` calls nested inside helpers. If your manifest is
     /// that clever, you're asking spmx to do something it can't safely guarantee and
     /// we throw `.noPackageInit` on principle.
-    private func findPackageCall() throws -> FunctionCallExprSyntax {
+    func findPackageCall() throws -> FunctionCallExprSyntax {
         var found: [FunctionCallExprSyntax] = []
         collectPackageCalls(from: tree.statements.map { $0.item }, into: &found)
 
@@ -413,7 +259,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// manifest wraps the entire `let package = ...` in conditional
     /// compilation, we recurse into every `#if`/`#elseif`/`#else` clause
     /// to find them all. Two or more hits → `.multiplePackageInits`.
-    private func collectPackageCalls(
+    func collectPackageCalls(
         from items: [CodeBlockItemSyntax.Item],
         into results: inout [FunctionCallExprSyntax]
     ) {
@@ -443,7 +289,7 @@ public struct ManifestEditor: @unchecked Sendable {
 
     /// Find an argument by its label name in a call expression's argument list.
     /// Returns `nil` if not present.
-    private static func argument(
+    static func argument(
         labeled name: String,
         in call: FunctionCallExprSyntax
     ) -> LabeledExprSyntax? {
@@ -459,7 +305,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// if the literal is interpolated (`"\(foo)/bar"`) or not a string literal at all.
     /// We refuse to reason about interpolated strings because their runtime value is
     /// what SPM cares about, and we can't evaluate them statically.
-    private static func plainStringLiteral(_ expr: ExprSyntax) -> String? {
+    static func plainStringLiteral(_ expr: ExprSyntax) -> String? {
         guard let literal = expr.as(StringLiteralExprSyntax.self) else { return nil }
         // A plain literal has exactly one segment of kind StringSegmentSyntax.
         guard literal.segments.count == 1,
@@ -502,7 +348,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// So we must check the raw expression *before* attempting the
     /// `ArrayExprSyntax` cast. This walks the full subtree to cover both
     /// top-level and nested `#if` blocks.
-    private static func containsIfConfig(_ node: Syntax) -> Bool {
+    static func containsIfConfig(_ node: Syntax) -> Bool {
         if node.as(IfConfigDeclSyntax.self) != nil {
             return true
         }
@@ -515,7 +361,7 @@ public struct ManifestEditor: @unchecked Sendable {
     }
 
     /// Convenience overload that accepts an `ExprSyntax`.
-    private static func containsIfConfig(_ expr: ExprSyntax) -> Bool {
+    static func containsIfConfig(_ expr: ExprSyntax) -> Bool {
         containsIfConfig(Syntax(expr))
     }
 
@@ -527,7 +373,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// check would incorrectly flag the entire targets array as conditional when
     /// only a nested target-dep array contains `#if`. The per-target check
     /// (which runs later in the iteration loop) handles the nested case.
-    private static func containsShallowIfConfig(_ node: Syntax) -> Bool {
+    static func containsShallowIfConfig(_ node: Syntax) -> Bool {
         for child in node.children(viewMode: .sourceAccurate) {
             if child.as(IfConfigDeclSyntax.self) != nil {
                 return true
@@ -537,7 +383,7 @@ public struct ManifestEditor: @unchecked Sendable {
     }
 
     /// Convenience overload that accepts an `ExprSyntax`.
-    private static func containsShallowIfConfig(_ expr: ExprSyntax) -> Bool {
+    static func containsShallowIfConfig(_ expr: ExprSyntax) -> Bool {
         containsShallowIfConfig(Syntax(expr))
     }
 
@@ -553,7 +399,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// - The new element itself gets a trailing comma too.
     /// - If the array was empty, insert a single element with a trailing comma and
     ///   trust the caller's `[]` whitespace.
-    private static func appending(
+    static func appending(
         elementSource: String,
         to array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
@@ -590,7 +436,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// Remove the element at the given index from an array expression. Each
     /// `ArrayElementSyntax` owns its own leading trivia, so dropping an element
     /// drops its newline + indent; neighbors keep theirs intact.
-    private static func removing(
+    static func removing(
         elementAt index: Int,
         from array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
@@ -603,7 +449,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// identity. Returns the original array unchanged if no such element exists
     /// (callers should pre-check presence; this is a helper for the atomic
     /// `removingPackageCompletely` flow which has already validated existence).
-    private static func removingPackageElement(
+    static func removingPackageElement(
         withIdentity identity: String,
         from array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
@@ -625,7 +471,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// Non-product elements (string literals, `.target(...)`, `.byName(...)`) are
     /// left untouched. Used by `removingPackageCompletely` to sweep all references
     /// from a target in one batched filter pass.
-    private static func removingProducts(
+    static func removingProducts(
         matchingPackage package: String,
         from array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
@@ -642,7 +488,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// Insert a `dependencies: [ <element> ]` argument into a Package(...) argument
     /// list that doesn't yet have one. Position: before `targets:` if it exists,
     /// otherwise at the end. This matches canonical Package(...) ordering.
-    private static func insertingDependenciesArgument(
+    static func insertingDependenciesArgument(
         into arguments: LabeledExprListSyntax,
         withElementSource elementSource: String
     ) -> LabeledExprListSyntax {
@@ -702,7 +548,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// Render a `.package(url:, <requirement>)` call as source text. String form
     /// because SwiftSyntax's builder DSL is verbose for this case and strings
     /// produce output that matches what a human would write.
-    private static func renderPackageCall(
+    static func renderPackageCall(
         url: String,
         requirement: VersionRequirement
     ) -> String {
@@ -726,434 +572,6 @@ public struct ManifestEditor: @unchecked Sendable {
         }
     }
 
-    // MARK: - Mutation
-
-    /// Add a `.package(url:, ...)` entry to the top-level `dependencies:` array.
-    ///
-    /// Handles three manifest shapes:
-    ///   1. `dependencies: [...]` exists → append to the array.
-    ///   2. `dependencies:` is missing → insert the argument before `targets:` (or at
-    ///      the end if `targets:` is also missing).
-    ///   3. `dependencies:` is a non-literal (variable, helper call) → refuse.
-    ///
-    /// - Throws: `.duplicatePackage` if a package with the same identity already exists,
-    ///   `.dependenciesNotArrayLiteral` if the argument is non-literal,
-    ///   `.noPackageInit` if there's no top-level Package init.
-    public func addingDependency(
-        url: String,
-        requirement: VersionRequirement
-    ) throws -> ManifestEditor {
-        let newIdentity = XcodePackageReference.identity(forRepositoryURL: url)
-        if try containsPackage(identity: newIdentity) {
-            throw Error.duplicatePackage(identity: newIdentity)
-        }
-
-        let packageCall = try findPackageCall()
-        let newElementSource = Self.renderPackageCall(url: url, requirement: requirement)
-
-        if let depsArg = Self.argument(labeled: "dependencies", in: packageCall) {
-            // Case 1 or 3: dependencies: already exists.
-            if Self.containsIfConfig(depsArg.expression) {
-                throw Error.conditionalDependencies
-            }
-            guard let array = depsArg.expression.as(ArrayExprSyntax.self) else {
-                throw Error.dependenciesNotArrayLiteral
-            }
-            let newArray = Self.appending(
-                elementSource: newElementSource,
-                to: array
-            )
-            let newTree = NodeReplacer(
-                targetID: array.id,
-                replacement: Syntax(newArray)
-            ).rewrite(tree)
-            guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-                throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-            }
-            return ManifestEditor(tree: newSourceFile)
-        }
-
-        // Case 2: no dependencies: argument at all. Insert one.
-        let newArguments = Self.insertingDependenciesArgument(
-            into: packageCall.arguments,
-            withElementSource: newElementSource
-        )
-        let newCall = packageCall.with(\.arguments, newArguments)
-        let newTree = NodeReplacer(
-            targetID: packageCall.id,
-            replacement: Syntax(newCall)
-        ).rewrite(tree)
-        guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-            throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-        }
-        return ManifestEditor(tree: newSourceFile)
-    }
-
-    /// Atomically remove a package from the top-level `dependencies:` array AND from
-    /// every target's `dependencies:` array that references it via `.product(package:)`.
-    ///
-    /// This is the operation `spmx remove` wants. Doing it as multiple separate
-    /// mutations would leave a window where the top-level dep is gone but orphan
-    /// `.product(...)` references still exist — a broken Package.swift that won't
-    /// compile. This method computes all the changes against the original tree (whose
-    /// node identities are still valid) and applies them in a single batch rewrite,
-    /// so either everything succeeds or nothing changes.
-    ///
-    /// ## Conservative rule on non-literal target dependencies
-    ///
-    /// If **any** target has a non-literal `dependencies:` argument (helper function,
-    /// variable, conditional), the entire operation is refused with
-    /// `.targetDependenciesNotArrayLiteral(target:)` — even if that target doesn't
-    /// obviously reference the package being removed. We can't statically evaluate a
-    /// helper function to know whether it produces a reference to the package, so the
-    /// only safe default is to refuse and ask the user to make the target's deps a
-    /// plain literal before retrying. This avoids silently leaving orphan refs in an
-    /// unreadable target.
-    ///
-    /// - Throws: `.packageNotFound` if no top-level entry matches,
-    ///   `.dependenciesNotArrayLiteral` if the top-level `dependencies:` isn't a
-    ///   literal, `.targetsNotArrayLiteral` if `targets:` isn't a literal,
-    ///   `.targetDependenciesNotArrayLiteral(target:)` if any target's deps aren't
-    ///   literal, `.noPackageInit` if no Package call.
-    public func removingPackageCompletely(identity: String) throws -> PackageRemoval {
-        let normalizedTarget = identity.lowercased()
-        let packageCall = try findPackageCall()
-
-        // Top-level deps must exist as a literal and contain the package.
-        guard let depsArg = Self.argument(labeled: "dependencies", in: packageCall) else {
-            throw Error.packageNotFound(identity: normalizedTarget)
-        }
-        if Self.containsIfConfig(depsArg.expression) {
-            throw Error.conditionalDependencies
-        }
-        guard let depsArray = depsArg.expression.as(ArrayExprSyntax.self) else {
-            throw Error.dependenciesNotArrayLiteral
-        }
-
-        var foundInTopLevel = false
-        for element in depsArray.elements {
-            guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package",
-                  let urlArg = Self.argument(labeled: "url", in: call),
-                  let url = Self.plainStringLiteral(urlArg.expression) else {
-                continue
-            }
-            if XcodePackageReference.identity(forRepositoryURL: url) == normalizedTarget {
-                foundInTopLevel = true
-                break
-            }
-        }
-        guard foundInTopLevel else {
-            throw Error.packageNotFound(identity: normalizedTarget)
-        }
-
-        // Collect all array replacements. Start with the top-level deps minus the
-        // package entry.
-        var replacements: [SyntaxIdentifier: Syntax] = [:]
-        replacements[depsArray.id] = Syntax(
-            Self.removingPackageElement(withIdentity: normalizedTarget, from: depsArray)
-        )
-
-        // Pre-scan every target. Enforce the conservative rule: any non-literal
-        // target deps → refuse. For literal target deps that reference the package,
-        // stage a replacement array with those references filtered out.
-        var affectedTargets: [String] = []
-        if let targetsArg = Self.argument(labeled: "targets", in: packageCall) {
-            if Self.containsShallowIfConfig(targetsArg.expression) {
-                throw Error.conditionalTargets
-            }
-            guard let targetsArray = targetsArg.expression.as(ArrayExprSyntax.self) else {
-                throw Error.targetsNotArrayLiteral
-            }
-            for element in targetsArray.elements {
-                guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                      call.calledExpression.as(MemberAccessExprSyntax.self) != nil,
-                      let nameArg = Self.argument(labeled: "name", in: call),
-                      let targetName = Self.plainStringLiteral(nameArg.expression) else {
-                    continue
-                }
-
-                // Bare target (no dependencies: argument) can't reference anything.
-                guard let tDepsArg = Self.argument(labeled: "dependencies", in: call) else {
-                    continue
-                }
-
-                // Conditional target deps → explicit refusal.
-                if Self.containsIfConfig(tDepsArg.expression) {
-                    throw Error.conditionalTargetDependencies(target: targetName)
-                }
-                // Non-literal target deps → conservative refusal.
-                guard let tDepsArray = tDepsArg.expression.as(ArrayExprSyntax.self) else {
-                    throw Error.targetDependenciesNotArrayLiteral(target: targetName)
-                }
-
-                // Does this target reference the package? If so, stage a replacement.
-                let hasReference = tDepsArray.elements.contains { el in
-                    guard let (_, pkg) = Self.productNameAndPackage(from: el.expression) else {
-                        return false
-                    }
-                    return pkg.lowercased() == normalizedTarget
-                }
-                if hasReference {
-                    let swept = Self.removingProducts(
-                        matchingPackage: normalizedTarget,
-                        from: tDepsArray
-                    )
-                    replacements[tDepsArray.id] = Syntax(swept)
-                    affectedTargets.append(targetName)
-                }
-            }
-        }
-
-        // Single-pass batch rewrite.
-        let newTree = BatchNodeReplacer(replacements: replacements).rewrite(tree)
-        guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-            throw Error.parseFailed("batch rewrite produced non-SourceFileSyntax")
-        }
-        return PackageRemoval(
-            editor: ManifestEditor(tree: newSourceFile),
-            affectedTargets: affectedTargets
-        )
-    }
-
-    /// Remove the `.package(url:, ...)` entry whose URL has the given SPM identity.
-    ///
-    /// - Throws: `.packageNotFound` if no matching entry exists,
-    ///   `.dependenciesNotArrayLiteral` if the manifest shape is unusual,
-    ///   `.noPackageInit` if there's no top-level Package init.
-    public func removingDependency(identity: String) throws -> ManifestEditor {
-        let normalizedTarget = identity.lowercased()
-        let packageCall = try findPackageCall()
-        guard let depsArg = Self.argument(labeled: "dependencies", in: packageCall) else {
-            throw Error.packageNotFound(identity: normalizedTarget)
-        }
-        if Self.containsIfConfig(depsArg.expression) {
-            throw Error.conditionalDependencies
-        }
-        guard let array = depsArg.expression.as(ArrayExprSyntax.self) else {
-            throw Error.dependenciesNotArrayLiteral
-        }
-
-        // Find the element to remove by identity.
-        var targetIndex: Int? = nil
-        for (i, element) in array.elements.enumerated() {
-            guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package",
-                  let urlArg = Self.argument(labeled: "url", in: call),
-                  let urlString = Self.plainStringLiteral(urlArg.expression) else {
-                continue
-            }
-            if XcodePackageReference.identity(forRepositoryURL: urlString) == normalizedTarget {
-                targetIndex = i
-                break
-            }
-        }
-
-        guard let idx = targetIndex else {
-            throw Error.packageNotFound(identity: normalizedTarget)
-        }
-
-        let newArray = Self.removing(elementAt: idx, from: array)
-        let newTree = NodeReplacer(
-            targetID: array.id,
-            replacement: Syntax(newArray)
-        ).rewrite(tree)
-        guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-            throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-        }
-        return ManifestEditor(tree: newSourceFile)
-    }
-
-    /// Add a `.product(name:, package:)` entry to the given target's `dependencies:`
-    /// array. Does not touch the top-level `dependencies:` — that's a separate call
-    /// because the same package can expose multiple products and `add` may want to
-    /// wire several of them into the same target.
-    ///
-    /// Handles two target shapes:
-    ///   1. Target already has `dependencies: [...]` → append.
-    ///   2. Target is bare (`.target(name: "X")`) → inject `dependencies: [...]`.
-    ///
-    /// - Throws: `.targetNotFound` if no target matches,
-    ///   `.duplicateProductDependency` if the product is already wired to this target,
-    ///   `.targetDependenciesNotArrayLiteral` if the target's dependencies: is not
-    ///   a plain array, `.targetsNotArrayLiteral` for the same reason at the
-    ///   Package(...) level.
-    public func addingProductDependency(
-        productName: String,
-        package: String,
-        target: String
-    ) throws -> ManifestEditor {
-        let (targetCall, _) = try findTargetCall(named: target)
-        let elementSource = ".product(name: \"\(productName)\", package: \"\(package)\")"
-
-        if let depsArg = Self.argument(labeled: "dependencies", in: targetCall) {
-            // Case 1: target has a dependencies: array.
-            if Self.containsIfConfig(depsArg.expression) {
-                throw Error.conditionalTargetDependencies(target: target)
-            }
-            guard let array = depsArg.expression.as(ArrayExprSyntax.self) else {
-                throw Error.targetDependenciesNotArrayLiteral(target: target)
-            }
-
-            // Duplicate check: iterate existing elements looking for a matching
-            // .product(name:, package:) pair. Other element shapes (strings,
-            // .target(...), .byName(...)) are skipped.
-            for element in array.elements {
-                if let (existingProduct, existingPackage) =
-                    Self.productNameAndPackage(from: element.expression),
-                   existingProduct == productName, existingPackage == package {
-                    throw Error.duplicateProductDependency(
-                        productName: productName,
-                        target: target
-                    )
-                }
-            }
-
-            let newArray = Self.appending(elementSource: elementSource, to: array)
-            let newTree = NodeReplacer(
-                targetID: array.id,
-                replacement: Syntax(newArray)
-            ).rewrite(tree)
-            guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-                throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-            }
-            return ManifestEditor(tree: newSourceFile)
-        }
-
-        // Case 2: target is bare — no dependencies: argument. Inject one.
-        let newArguments = Self.insertingTargetDependenciesArgument(
-            into: targetCall.arguments,
-            withElementSource: elementSource
-        )
-        let newTargetCall = targetCall.with(\.arguments, newArguments)
-        let newTree = NodeReplacer(
-            targetID: targetCall.id,
-            replacement: Syntax(newTargetCall)
-        ).rewrite(tree)
-        guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-            throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-        }
-        return ManifestEditor(tree: newSourceFile)
-    }
-
-    /// Atomically add a top-level `.package(url:, …)` entry AND wire one of its
-    /// products into a specific target's `dependencies:` array.
-    ///
-    /// This is the operation `spmx add` wants. It's the mirror of
-    /// `removingPackageCompletely`: either both edits land on the final serialized
-    /// file, or neither does — the caller never observes a half-applied state where
-    /// the package is declared but the target doesn't use it (or vice versa).
-    ///
-    /// ## Atomicity model
-    ///
-    /// Implemented as a two-step chain rather than a single batch rewrite. This is
-    /// sound because `ManifestEditor` is value-semantic and the intermediate tree
-    /// lives only in memory — if the second step throws, the whole call throws and
-    /// the caller's original editor is unchanged. Nothing is ever written to disk
-    /// until the caller explicitly calls `.write(to:)` on a fully-applied result.
-    ///
-    /// A batch rewrite (like `removingPackageCompletely` uses) would buy nothing
-    /// here because the two mutations operate on sub-trees at different depths
-    /// (top-level `dependencies:` and a specific target's `dependencies:`), and the
-    /// second mutation doesn't depend on the first observing fresh node identities.
-    /// Chaining is simpler, keeps `BatchNodeReplacer` focused on the one case it
-    /// actually needs, and gives the exact same observable atomicity.
-    ///
-    /// ## Pre-validation ordering
-    ///
-    /// `addingDependency` checks for `.duplicatePackage`. `addingProductDependency`
-    /// checks for target existence and `.duplicateProductDependency`. They're
-    /// chained in the order: package → product. If the package is already present
-    /// (e.g. the user adds Alamofire twice), you get `.duplicatePackage` and the
-    /// target check never runs. If the package is fresh but the target doesn't
-    /// exist, you get `.targetNotFound` and the in-memory package add is discarded.
-    ///
-    /// - Parameters:
-    ///   - url: Repository URL to pin at the top level. Identity is derived via
-    ///     `XcodePackageReference.identity(forRepositoryURL:)`.
-    ///   - requirement: Version pinning strategy (`.from`, `.exact`, `.branch`, `.upToNextMajor`, etc).
-    ///   - productName: The `.product(name:)` value to insert into the target.
-    ///   - packageIdentity: The `.product(package:)` value. Usually this is the
-    ///     SPM identity of the package being added — passed explicitly so the
-    ///     caller can override if a package's manifest declares products under a
-    ///     different name (rare but possible).
-    ///   - target: Name of the target whose `dependencies:` array should receive
-    ///     the new product reference.
-    /// - Throws: Anything `addingDependency` or `addingProductDependency` can
-    ///   throw. See their docs for the specific cases.
-    public func addingPackageWiredToTarget(
-        url: String,
-        requirement: VersionRequirement,
-        productName: String,
-        packageIdentity: String,
-        target: String
-    ) throws -> ManifestEditor {
-        let withTopLevel = try addingDependency(url: url, requirement: requirement)
-        return try withTopLevel.addingProductDependency(
-            productName: productName,
-            package: packageIdentity,
-            target: target
-        )
-    }
-
-    /// Remove a `.product(name:, package:)` entry from the given target's
-    /// `dependencies:` array. Matches by product name AND package name so that
-    /// two different packages exposing a product with the same name are
-    /// disambiguated correctly.
-    ///
-    /// - Throws: `.targetNotFound` if no target matches,
-    ///   `.productDependencyNotFound` if the product isn't wired to this target,
-    ///   `.targetDependenciesNotArrayLiteral` if the target's dependencies: is
-    ///   not a plain array.
-    public func removingProductDependency(
-        productName: String,
-        package: String,
-        target: String
-    ) throws -> ManifestEditor {
-        let (targetCall, _) = try findTargetCall(named: target)
-        guard let depsArg = Self.argument(labeled: "dependencies", in: targetCall) else {
-            throw Error.productDependencyNotFound(
-                productName: productName,
-                target: target
-            )
-        }
-        if Self.containsIfConfig(depsArg.expression) {
-            throw Error.conditionalTargetDependencies(target: target)
-        }
-        guard let array = depsArg.expression.as(ArrayExprSyntax.self) else {
-            throw Error.targetDependenciesNotArrayLiteral(target: target)
-        }
-
-        var targetIndex: Int? = nil
-        for (i, element) in array.elements.enumerated() {
-            if let (existingProduct, existingPackage) =
-                Self.productNameAndPackage(from: element.expression),
-               existingProduct == productName, existingPackage == package {
-                targetIndex = i
-                break
-            }
-        }
-
-        guard let idx = targetIndex else {
-            throw Error.productDependencyNotFound(
-                productName: productName,
-                target: target
-            )
-        }
-
-        let newArray = Self.removing(elementAt: idx, from: array)
-        let newTree = NodeReplacer(
-            targetID: array.id,
-            replacement: Syntax(newArray)
-        ).rewrite(tree)
-        guard let newSourceFile = newTree.as(SourceFileSyntax.self) else {
-            throw Error.parseFailed("rewrite produced non-SourceFileSyntax")
-        }
-        return ManifestEditor(tree: newSourceFile)
-    }
-
     // MARK: - Target lookup helpers
 
     /// Locate a target by name in the Package's `targets:` array. Returns the
@@ -1162,7 +580,7 @@ public struct ManifestEditor: @unchecked Sendable {
     ///
     /// - Throws: `.targetsNotArrayLiteral` if targets: is non-literal,
     ///   `.targetNotFound` with the list of candidates if no target matches.
-    private func findTargetCall(
+    func findTargetCall(
         named targetName: String
     ) throws -> (call: FunctionCallExprSyntax, candidates: [String]) {
         let packageCall = try findPackageCall()
@@ -1201,7 +619,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// Extract `(productName, package)` from a `.product(name: "X", package: "Y")`
     /// expression. Returns nil for any other element shape (string literal,
     /// `.target(...)`, `.byName(...)`, etc.).
-    private static func productNameAndPackage(
+    static func productNameAndPackage(
         from expr: ExprSyntax
     ) -> (product: String, package: String)? {
         guard let call = expr.as(FunctionCallExprSyntax.self),
@@ -1220,7 +638,7 @@ public struct ManifestEditor: @unchecked Sendable {
     /// doesn't yet have one. Mirrors `insertingDependenciesArgument` but scoped to
     /// target calls — position goes right after the `name:` argument, which is
     /// where target deps canonically live.
-    private static func insertingTargetDependenciesArgument(
+    static func insertingTargetDependenciesArgument(
         into arguments: LabeledExprListSyntax,
         withElementSource elementSource: String
     ) -> LabeledExprListSyntax {
@@ -1314,7 +732,7 @@ public struct ManifestEditor: @unchecked Sendable {
 /// Only ArrayExprSyntax and FunctionCallExprSyntax cases are overridden because
 /// those are the only node types ManifestEditor ever swaps. If the editor grows
 /// to replace other node kinds later, add the corresponding visit override here.
-private final class NodeReplacer: SyntaxRewriter {
+final class NodeReplacer: SyntaxRewriter {
     let targetID: SyntaxIdentifier
     let replacement: Syntax
 
@@ -1352,7 +770,7 @@ private final class NodeReplacer: SyntaxRewriter {
 /// captured against the original tree become stale. Computing all the
 /// replacements against the original (whose IDs are still valid) and then doing
 /// one pass is both cleaner and O(n) instead of O(n × operations).
-private final class BatchNodeReplacer: SyntaxRewriter {
+final class BatchNodeReplacer: SyntaxRewriter {
     let replacements: [SyntaxIdentifier: Syntax]
 
     init(replacements: [SyntaxIdentifier: Syntax]) {

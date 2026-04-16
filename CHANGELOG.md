@@ -2,6 +2,11 @@
 
 All notable changes to [`spmx`](https://github.com/macitch/spmx) are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.1.1] — 2026-04-16
+
+### Changed
+- Internal refactor: split `ManifestEditor.swift` (1,368 LOC) into focused extension files — `ManifestEditor+Inspection.swift`, `ManifestEditor+Add.swift`, `ManifestEditor+Remove.swift`. Main file reduced 43%. No public API or behavior change; all 360 tests still pass.
+
 ## [0.1.0] — 2026-04-10
 
 ### Added

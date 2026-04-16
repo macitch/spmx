@@ -63,6 +63,18 @@ Honest answer: for some things, you should. Here's what SPM already does well, s
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install macitch/spmx/spmx
+```
+
+### Mint
+
+```bash
+mint install macitch/spmx
+```
+
 ### From source
 
 ```bash
@@ -70,12 +82,6 @@ git clone https://github.com/macitch/spmx.git
 cd spmx
 swift build -c release
 cp .build/release/spmx /usr/local/bin/
-```
-
-### Mint
-
-```bash
-mint install macitch/spmx
 ```
 
 ## Commands
@@ -258,7 +264,7 @@ swift test
 
 ## Status
 
-`spmx` is **v0.1.0.** It works on the projects I've tested it against, but the edge cases of `Package.swift` are infinite. File an issue if it breaks on yours.
+`spmx` is **v0.1.1.** It works on the projects I've tested it against, but the edge cases of `Package.swift` are infinite. File an issue if it breaks on yours.
 
 See [ROADMAP.md](./ROADMAP.md) for what's planned through v1.0.
 

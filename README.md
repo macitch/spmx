@@ -1,5 +1,10 @@
 # spmx
 
+[![Release](https://img.shields.io/github/v/release/macitch/spmx?label=release)](https://github.com/macitch/spmx/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Swift 6](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-blue.svg)](https://www.apple.com/macos/)
+
 > The dependency commands Swift Package Manager forgot to ship.
 
 Created by [macitch](https://github.com/macitch)

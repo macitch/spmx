@@ -141,11 +141,22 @@ public struct AddRunner: Sendable {
         public var description: String {
             switch self {
             case .pathDoesNotExist(let path):
-                return "Path does not exist: \(path)"
+                return """
+                Path does not exist: \(path). Check the spelling, or omit `--path` to use \
+                the current directory.
+                """
             case .noManifest(let dir):
-                return "No Package.swift found in \(dir)."
+                return """
+                No Package.swift found in \(dir). Run spmx from a SwiftPM package directory, \
+                or pass `--path <dir>` pointing at one. To create a new package, run \
+                `swift package init`.
+                """
             case .noPackageInit:
-                return "Couldn't find `let package = Package(...)` in Package.swift."
+                return """
+                Couldn't find `let package = Package(...)` in Package.swift. \
+                spmx only edits the canonical manifest shape; if yours constructs the Package \
+                call differently, edit Package.swift by hand.
+                """
             case .multiplePackageInits:
                 return """
                 Multiple `let package = Package(...)` declarations found in Package.swift. \
@@ -158,7 +169,11 @@ public struct AddRunner: Sendable {
                 Rewrite it as a literal array and try again.
                 """
             case .targetsNotLiteral:
-                return "Package.swift's `targets:` is not a plain array literal."
+                return """
+                Package.swift's `targets:` is not a plain array literal. \
+                Rewrite it as a plain `[ ... ]` array of `.target(...)` / `.executableTarget(...)` \
+                calls and try again.
+                """
             case .targetDependenciesNotLiteral(let target):
                 return """
                 Target "\(target)" has a non-literal `dependencies:` argument.
@@ -166,8 +181,9 @@ public struct AddRunner: Sendable {
                 """
             case .duplicatePackage(let id):
                 return """
-                Package "\(id)" is already in Package.swift's dependencies.
-                Nothing to add.
+                Package "\(id)" is already in Package.swift's dependencies — nothing to add. \
+                Run `spmx outdated` to check for newer versions, or `spmx remove \(id)` and \
+                re-add to change its version constraint.
                 """
             case .versionConflict(let msg):
                 return "Conflicting version options: \(msg). Use only one of --from, --exact, --branch, --revision."
@@ -199,6 +215,7 @@ public struct AddRunner: Sendable {
                 return """
                 Product "\(name)" not found in package "\(pkgName)".
                 Available products: \(available.joined(separator: ", "))
+                Re-run with `--product <name>` using one of those names.
                 """
             case .dynamicProducts(let pkgName):
                 return """
@@ -217,28 +234,51 @@ public struct AddRunner: Sendable {
                   spmx add <package> --target \(targets[0])
                 """
             case .noTargets:
-                return "Package.swift has no non-test targets to wire the dependency into."
-            case .targetNotFound(let name, let candidates):
-                let list = candidates.isEmpty
-                    ? "No targets found."
-                    : "Available targets: \(candidates.joined(separator: ", "))"
                 return """
-                Target "\(name)" not found in Package.swift.
-                \(list)
+                Package.swift has no non-test targets to wire the dependency into. \
+                Add a `.target(...)` or `.executableTarget(...)` to Package.swift first, \
+                then re-run `spmx add`.
+                """
+            case .targetNotFound(let name, let candidates):
+                if candidates.isEmpty {
+                    return """
+                    Target "\(name)" not found in Package.swift. No targets are defined; \
+                    add one to Package.swift first, then re-run `spmx add`.
+                    """
+                }
+                let list = candidates.joined(separator: ", ")
+                return """
+                Target "\(name)" not found in Package.swift. Available targets: \(list). \
+                Re-run with `--target <name>` using one of those names.
                 """
             case .duplicateProductDependency(let product, let target):
                 return """
-                Product "\(product)" is already wired into target "\(target)".
-                Nothing to add.
+                Product "\(product)" is already wired into target "\(target)" — nothing to add. \
+                If you wanted a different product from the same package, pass `--product <name>` \
+                with the correct product name.
                 """
             case .resolveFailed(let msg):
-                return msg
+                return """
+                Couldn't resolve the package: \(msg). Pass the repository URL directly with \
+                `--url <url>` to bypass the catalog, or use `spmx search <term>` to find the \
+                right name.
+                """
             case .fetchMetadataFailed(let msg):
-                return "Failed to fetch package metadata: \(msg)"
+                return """
+                Failed to fetch package metadata: \(msg). Check your network connection. If the \
+                package is reachable but the error persists, pass `--product <name>` to skip \
+                metadata discovery.
+                """
             case .parseFailed(let msg):
-                return "Failed to parse Package.swift: \(msg)"
+                return """
+                Failed to parse Package.swift: \(msg). \
+                Run `swift package describe` to see the compiler's view; fix any syntax errors and retry.
+                """
             case .writeFailed(let path, let reason):
-                return "Failed to write \(path): \(reason)"
+                return """
+                Failed to write \(path): \(reason). Check write permissions on the directory \
+                and that there's enough disk space; the manifest was not modified.
+                """
             }
         }
 

@@ -61,11 +61,24 @@ public struct XcodeProjectReader: Sendable {
         public var description: String {
             switch self {
             case .projectFileNotFound(let url):
-                return "No project.pbxproj found at \(url.path)"
+                return """
+                No project.pbxproj found at \(url.path). \
+                Make sure you're pointing at a valid .xcodeproj bundle (e.g. `MyApp.xcodeproj`), \
+                not its parent directory.
+                """
             case .parseFailed(let err):
-                return "Failed to parse project.pbxproj: \(err)"
+                return """
+                Failed to parse project.pbxproj: \(err). \
+                The project file may be corrupted; try opening it in Xcode to repair. \
+                If Xcode opens it without issue, please file a spmx bug at \
+                https://github.com/macitch/spmx/issues.
+                """
             case .unexpectedStructure(let detail):
-                return "Unexpected pbxproj structure: \(detail)"
+                return """
+                Unexpected pbxproj structure: \(detail). \
+                spmx may not yet support this project's format. Please file an issue at \
+                https://github.com/macitch/spmx/issues with your Xcode version.
+                """
             }
         }
 

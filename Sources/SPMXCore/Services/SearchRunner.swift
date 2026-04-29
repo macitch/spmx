@@ -56,7 +56,11 @@ public struct SearchRunner: Sendable {
                 Check the spelling, or try a broader search term.
                 """
             case .catalogFailed(let msg):
-                return "Failed to load the package catalog: \(msg)"
+                return """
+                Failed to load the package catalog: \(msg). \
+                Check your network connection. If you know the package URL already, you can \
+                skip search and pass it directly to `spmx add` with `--url <url>`.
+                """
             }
         }
 

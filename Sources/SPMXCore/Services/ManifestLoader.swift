@@ -32,16 +32,29 @@ public enum ManifestLoaderError: Swift.Error, CustomStringConvertible, Equatable
     public var description: String {
         switch self {
         case .packageSwiftNotFound(let url):
-            return "No Package.swift found at \(url.path)"
+            return """
+            No Package.swift found at \(url.path). \
+            Run spmx from a SwiftPM package directory, or pass `--path <dir>` to point at one.
+            """
         case .dumpFailed(let code, let stderr):
             // Keep the stderr trimmed — SPM is verbose and the useful line is usually first.
             let snippet = stderr
                 .split(separator: "\n")
                 .prefix(3)
                 .joined(separator: "\n")
-            return "swift package dump-package failed (exit \(code)):\n\(snippet)"
+            return """
+            swift package dump-package failed (exit \(code)):
+            \(snippet)
+
+            Fix the Package.swift error reported above and retry. Macro/plugin packages \
+            sometimes hang or fail here; consider running `swift package resolve` first.
+            """
         case .decodeFailed(let err):
-            return "Failed to decode dump-package output: \(err)"
+            return """
+            Failed to decode dump-package output: \(err). \
+            This is likely a spmx bug — please file an issue at \
+            https://github.com/macitch/spmx/issues.
+            """
         }
     }
 

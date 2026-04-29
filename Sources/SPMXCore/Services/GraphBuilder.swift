@@ -201,11 +201,23 @@ public struct GraphBuilder: Sendable {
         public var description: String {
             switch self {
             case .projectNotFound(let url):
-                return "No project or workspace at \(url.path)"
+                return """
+                No project or workspace at \(url.path). \
+                Pass `--path` pointing at a directory that contains a .xcodeproj or .xcworkspace, \
+                or at the project/workspace bundle directly.
+                """
             case .unsupportedExtension(let url):
-                return "Expected .xcodeproj or .xcworkspace, got \(url.lastPathComponent)"
+                return """
+                Expected .xcodeproj or .xcworkspace, got \(url.lastPathComponent). \
+                Pass `--path` pointing at an Xcode project bundle, an Xcode workspace bundle, \
+                or a SwiftPM package directory.
+                """
             case .readFailed(let err):
-                return "Failed to read Xcode project: \(err)"
+                return """
+                Failed to read Xcode project: \(err). \
+                Try opening the project in Xcode to verify it's not corrupted. If Xcode opens \
+                it without issue, please file a spmx bug at https://github.com/macitch/spmx/issues.
+                """
             }
         }
     }

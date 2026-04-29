@@ -106,8 +106,9 @@ public struct RemoveRunner: Sendable {
                 """
             case .packageNotFound(let id):
                 return """
-                Package "\(id)" is not listed in Package.swift's top-level
-                dependencies. Nothing to remove.
+                Package "\(id)" is not listed in Package.swift's top-level dependencies — \
+                nothing to remove. Check the spelling, or list current dependencies with \
+                `swift package show-dependencies`.
                 """
             case .topLevelDependenciesNotLiteral:
                 return """
@@ -146,11 +147,20 @@ public struct RemoveRunner: Sendable {
                 Edit Package.swift by hand.
                 """
             case .parseFailed(let msg):
-                return "Failed to parse Package.swift: \(msg)"
+                return """
+                Failed to parse Package.swift: \(msg). \
+                Run `swift package describe` to see the compiler's view; fix any syntax errors and retry.
+                """
             case .readFailed(let path, let reason):
-                return "Failed to read \(path): \(reason)"
+                return """
+                Failed to read \(path): \(reason). \
+                Check the file's permissions and that no other process is holding it open.
+                """
             case .writeFailed(let path, let reason):
-                return "Failed to write \(path): \(reason)"
+                return """
+                Failed to write \(path): \(reason). Check write permissions on the directory \
+                and that there's enough disk space; the manifest was not modified.
+                """
             }
         }
 

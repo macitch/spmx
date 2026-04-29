@@ -23,11 +23,23 @@ public struct ResolvedParser: Sendable {
         public var description: String {
             switch self {
             case .fileNotFound(let url):
-                return "Package.resolved not found at \(url.path)"
+                return """
+                Package.resolved not found at \(url.path). \
+                Run `swift package resolve` first to generate it, or pass `--path <dir>` \
+                pointing at a package directory.
+                """
             case .unsupportedVersion(let v):
-                return "Unsupported Package.resolved version: \(v). spmx supports versions 2 and 3."
+                return """
+                Unsupported Package.resolved version: \(v). spmx supports versions 2 and 3. \
+                If you're on a newer Swift toolchain that ships Package.resolved v\(v), \
+                please file an issue at https://github.com/macitch/spmx/issues.
+                """
             case .decodingFailed(let err):
-                return "Failed to decode Package.resolved: \(err.localizedDescription)"
+                return """
+                Failed to decode Package.resolved: \(err.localizedDescription). \
+                Re-run `swift package resolve` to regenerate the file. If the error \
+                persists, please file an issue at https://github.com/macitch/spmx/issues.
+                """
             }
         }
 

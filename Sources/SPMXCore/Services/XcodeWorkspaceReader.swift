@@ -69,11 +69,24 @@ public struct XcodeWorkspaceReader: Sendable {
         public var description: String {
             switch self {
             case .workspaceFileNotFound(let url):
-                return "No contents.xcworkspacedata found at \(url.path)"
+                return """
+                No contents.xcworkspacedata found at \(url.path). \
+                Make sure you're pointing at a valid .xcworkspace bundle (e.g. `MyApp.xcworkspace`), \
+                not its parent directory.
+                """
             case .parseFailed(let err):
-                return "Failed to parse contents.xcworkspacedata: \(err)"
+                return """
+                Failed to parse contents.xcworkspacedata: \(err). \
+                The workspace file may be corrupted; try opening it in Xcode to repair. \
+                If Xcode opens it without issue, please file a spmx bug at \
+                https://github.com/macitch/spmx/issues.
+                """
             case .unexpectedStructure(let detail):
-                return "Unexpected workspace structure: \(detail)"
+                return """
+                Unexpected workspace structure: \(detail). \
+                spmx may not yet support this workspace's format. Please file an issue at \
+                https://github.com/macitch/spmx/issues with your Xcode version.
+                """
             }
         }
 

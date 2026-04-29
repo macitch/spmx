@@ -83,16 +83,31 @@ public struct ManifestFetcher: Sendable {
                 return """
                 Failed to clone \(url):
                 \(stderr)
+
+                Check that the URL is correct and reachable, and that you have credentials \
+                for private repos. To skip metadata discovery, pass `--product <name>` and \
+                spmx will trust your input.
                 """
             case .dumpFailed(let stderr):
                 return """
                 Failed to run `swift package dump-package` on the cloned repo:
                 \(stderr)
+
+                The repo may have a Package.swift that depends on macros, plugins, or other \
+                packages that fail to resolve. Pass `--product <name>` to skip metadata \
+                discovery and wire the product directly.
                 """
             case .decodeFailed(let msg):
-                return "Failed to decode dump-package output: \(msg)"
+                return """
+                Failed to decode dump-package output: \(msg). \
+                This is likely a spmx bug — please file an issue at \
+                https://github.com/macitch/spmx/issues with the package URL.
+                """
             case .filesystemFailed(let msg):
-                return "Filesystem error while preparing clone: \(msg)"
+                return """
+                Filesystem error while preparing clone: \(msg). \
+                Check `/tmp` is writable and has enough free space.
+                """
             }
         }
 

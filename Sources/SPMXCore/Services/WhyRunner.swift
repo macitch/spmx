@@ -74,7 +74,10 @@ public struct WhyRunner: Sendable {
                 Run `swift package resolve` first, or pass --path to point at a package directory.
                 """
             case .parseFailed(let msg):
-                return "Failed to parse Package.resolved: \(msg)"
+                return """
+                Failed to parse Package.resolved: \(msg). \
+                Re-run `swift package resolve` to regenerate the file, then try again.
+                """
             case .pathDoesNotExist(let path):
                 return """
                 Path does not exist: \(path)
@@ -97,15 +100,28 @@ public struct WhyRunner: Sendable {
                 Pass --path to choose one, e.g. `spmx why <pkg> --path \(candidates[0])`.
                 """
             case .xcodeReadFailed(let msg):
-                return "Failed to read Xcode project: \(msg)"
+                return """
+                Failed to read Xcode project: \(msg). \
+                Try opening the project in Xcode to verify it's not corrupted. If Xcode opens \
+                it without issue, please file a spmx bug at https://github.com/macitch/spmx/issues.
+                """
             case .targetNotInGraph(let target, let suggestions):
                 if suggestions.isEmpty {
-                    return "'\(target)' is not a dependency of this package."
+                    return """
+                    '\(target)' is not a dependency of this package. \
+                    Check the spelling, or run `spmx outdated --all` to see every package in the graph.
+                    """
                 }
                 let hint = suggestions.joined(separator: ", ")
-                return "'\(target)' is not a dependency of this package. Did you mean: \(hint)?"
+                return """
+                '\(target)' is not a dependency of this package. Did you mean: \(hint)? \
+                Re-run with one of those names, or `spmx outdated --all` to see the full graph.
+                """
             case .encodingFailed:
-                return "Failed to encode JSON output."
+                return """
+                Failed to encode JSON output. This is a spmx bug — please file an issue at \
+                https://github.com/macitch/spmx/issues with the command you ran.
+                """
             }
         }
 

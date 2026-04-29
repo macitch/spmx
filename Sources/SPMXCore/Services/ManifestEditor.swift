@@ -91,17 +91,31 @@ public struct ManifestEditor: @unchecked Sendable {
         public var description: String {
             switch self {
             case .fileNotFound(let url):
-                return "Package.swift not found at \(url.path)."
+                return """
+                Package.swift not found at \(url.path). Run spmx from a SwiftPM package \
+                directory, or pass `--path <dir>` to point at one.
+                """
             case .readFailed(let path, let err):
-                return "Failed to read Package.swift at \(path): \(err)"
+                return """
+                Failed to read Package.swift at \(path): \(err). \
+                Check the file's permissions and that no other process is holding it open.
+                """
             case .writeFailed(let path, let err):
-                return "Failed to write Package.swift at \(path): \(err)"
+                return """
+                Failed to write Package.swift at \(path): \(err). \
+                Check write permissions on the directory and that there's enough disk space; \
+                the manifest was not modified.
+                """
             case .parseFailed(let msg):
-                return "Failed to parse Package.swift: \(msg)"
+                return """
+                Failed to parse Package.swift: \(msg). \
+                Run `swift package describe` to see the compiler's view; fix any syntax errors and retry.
+                """
             case .noPackageInit:
                 return """
-                No top-level `let package = Package(...)` call found in Package.swift.
-                spmx can only edit standard SwiftPM manifests.
+                No top-level `let package = Package(...)` call found in Package.swift. \
+                spmx only edits the canonical manifest shape; if yours constructs the Package call \
+                differently (factory function, `.init`, etc.), edit Package.swift by hand.
                 """
             case .multiplePackageInits:
                 return """
@@ -118,22 +132,28 @@ public struct ManifestEditor: @unchecked Sendable {
                 """
             case .targetsNotArrayLiteral:
                 return """
-                The `targets:` argument of Package(...) is not a plain array literal.
-                spmx refuses to edit manifests that build their target list via helper
-                functions or variables. Edit Package.swift by hand.
+                The `targets:` argument of Package(...) is not a plain array literal. \
+                Rewrite it as a plain `[ ... ]` array of `.target(...)` / `.executableTarget(...)` \
+                calls in Package.swift and try again.
                 """
             case .targetDependenciesNotArrayLiteral(let target):
                 return """
-                The `dependencies:` argument of target '\(target)' is not a plain array
-                literal. spmx refuses to edit this target's dependencies. Edit Package.swift
-                by hand.
+                Target '\(target)' has a non-literal `dependencies:` argument (helper function, \
+                variable, or computed expression). Rewrite it as a plain `[ ... ]` array literal \
+                in Package.swift and try again.
                 """
             case .targetNotFound(let name, let candidates):
                 if candidates.isEmpty {
-                    return "No target named '\(name)' in Package.swift."
+                    return """
+                    No target named '\(name)' in Package.swift. \
+                    Check the spelling, or list available targets with `swift package describe`.
+                    """
                 }
                 let list = candidates.joined(separator: ", ")
-                return "No target named '\(name)' in Package.swift. Found: \(list)."
+                return """
+                No target named '\(name)' in Package.swift. Available targets: \(list). \
+                Re-run with `--target <name>` using one of those names.
+                """
             case .conditionalDependencies:
                 return """
                 Package.swift uses #if conditional compilation in its `dependencies:` array.
@@ -153,13 +173,27 @@ public struct ManifestEditor: @unchecked Sendable {
                 by hand.
                 """
             case .duplicatePackage(let identity):
-                return "Package '\(identity)' is already a dependency."
+                return """
+                Package '\(identity)' is already declared in Package.swift's dependencies — \
+                nothing to add. Run `spmx outdated` to check for newer versions, or remove and \
+                re-add the package to change its version constraint.
+                """
             case .packageNotFound(let identity):
-                return "Package '\(identity)' is not a dependency of this package."
+                return """
+                Package '\(identity)' is not a dependency of this package. Check the spelling, \
+                or list current dependencies with `swift package show-dependencies`.
+                """
             case .duplicateProductDependency(let product, let target):
-                return "Target '\(target)' already depends on product '\(product)'."
+                return """
+                Target '\(target)' already depends on product '\(product)' — nothing to wire. \
+                If you wanted a different product from the same package, pass `--product <name>` \
+                with the correct product name.
+                """
             case .productDependencyNotFound(let product, let target):
-                return "Target '\(target)' does not depend on product '\(product)'."
+                return """
+                Target '\(target)' does not depend on product '\(product)'. Check the spelling, \
+                or inspect the target's `dependencies:` array in Package.swift.
+                """
             }
         }
 

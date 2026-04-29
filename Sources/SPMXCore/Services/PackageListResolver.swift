@@ -96,9 +96,18 @@ public struct PackageListResolver: Sendable {
                   spmx add <name> --url <https://…>
                 """
             case .parseFailed(let msg):
-                return "Failed to parse the Swift Package Index catalog: \(msg)"
+                return """
+                Failed to parse the Swift Package Index catalog: \(msg). \
+                The catalog format may have changed — please file an issue at \
+                https://github.com/macitch/spmx/issues. Workaround: pass the URL directly with \
+                `--url <https://…>`.
+                """
             case .cacheWriteFailed(let msg):
-                return "Failed to cache the package catalog: \(msg)"
+                return """
+                Failed to cache the package catalog: \(msg). \
+                The current call still works, but the next call won't benefit from the cache. \
+                Check write permissions on `~/Library/Caches/spmx`.
+                """
             case .noMatch(let query):
                 return """
                 No package named "\(query)" found in the Swift Package Index.

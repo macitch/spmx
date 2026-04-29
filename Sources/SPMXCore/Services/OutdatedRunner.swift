@@ -80,9 +80,15 @@ public struct OutdatedRunner: Sendable {
                 dependencies.
                 """
             case .parseFailed(let msg):
-                return "Failed to parse Package.resolved: \(msg)"
+                return """
+                Failed to parse Package.resolved: \(msg). \
+                Re-run `swift package resolve` to regenerate the file, then try again.
+                """
             case .encodingFailed:
-                return "Failed to encode JSON output."
+                return """
+                Failed to encode JSON output. This is a spmx bug — please file an issue at \
+                https://github.com/macitch/spmx/issues with the command you ran.
+                """
             }
         }
 

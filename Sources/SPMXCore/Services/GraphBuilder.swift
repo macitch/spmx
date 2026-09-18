@@ -43,8 +43,8 @@ public struct GraphBuildResult: Sendable {
 ///
 /// Modern SwiftPM stores remote dependencies in `<root>/.build/checkouts/<identity>/`.
 /// Older SwiftPM used the URL's last path component (without `.git`) as the directory
-/// name. We try both, identity first. Local source-control dependencies (`.package(path:)`)
-/// have their location resolved relative to the root manifest. Registry dependencies have
+/// name. We try both, identity first. Local dependencies (`.package(path:)`)
+/// have their paths resolved relative to the declaring manifest. Registry dependencies have
 /// no checkout at all and are added as edge-less nodes — `why` against a registry dep
 /// answers correctly via the root → registry edge.
 ///
@@ -150,7 +150,8 @@ public struct GraphBuilder: Sendable {
                 if !visited.contains(depIdentity) {
                     let depDir = checkoutDirectory(
                         for: depIdentity,
-                        kind: dep.kind,
+                        dependency: dep,
+                        declaringDirectory: dir,
                         rootDirectory: rootDirectory,
                         pinByIdentity: pinByIdentity
                     )
@@ -158,7 +159,7 @@ public struct GraphBuilder: Sendable {
                     // not a silent omission. Registry pins legitimately return nil (no
                     // checkout exists) and are not counted as missing — a registry leaf
                     // with no outgoing edges is a correct graph, not a partial one.
-                    if depDir == nil && dep.kind == .sourceControl {
+                    if depDir == nil && dep.kind != .registry {
                         missing.append(depIdentity)
                     }
                     queue.append((depIdentity, depDir))
@@ -250,12 +251,8 @@ public struct GraphBuilder: Sendable {
     ///
     /// ## Limitations
     ///
-    /// - Transitive `fileSystem` (local-path) dependencies cannot be located, because
-    ///   `ManifestDump` doesn't carry the path. They are recorded as missing. In
-    ///   practice this never happens — local-path deps are an in-monorepo authoring
-    ///   convenience, not something a published package would expose to consumers.
-    /// - Custom DerivedData locations (set in Xcode prefs) are not supported in v0.1.
-    ///   See `XcodeCheckoutLocator` for details.
+    /// Local dependency paths are resolved relative to their declaring project or
+    /// manifest. Unavailable local directories are reported as missing manifests.
     public func buildFromXcode(
         projectURL: URL,
         locator: XcodeCheckoutLocator = XcodeCheckoutLocator()
@@ -272,6 +269,7 @@ public struct GraphBuilder: Sendable {
         let directRefs: [XcodePackageReference]
         let locatorProjectURL: URL
         let rootName: String
+        var declaringProjects: [String: URL] = [:]
 
         switch projectURL.pathExtension {
         case "xcodeproj":
@@ -291,6 +289,7 @@ public struct GraphBuilder: Sendable {
                     let refs = (try? projectReader.read(proj)) ?? []
                     for ref in refs where merged[ref.identity] == nil {
                         merged[ref.identity] = ref
+                        declaringProjects[ref.identity] = proj
                     }
                 }
                 directRefs = merged.values.sorted { $0.identity < $1.identity }
@@ -318,7 +317,16 @@ public struct GraphBuilder: Sendable {
             let id = ref.identity // already lowercased
             rootOutgoing.insert(id)
             nodes.insert(id)
-            let dir = locator.checkoutDirectory(for: id, projectURL: locatorProjectURL)
+            let dir: URL?
+            switch ref.kind {
+            case .remote:
+                dir = locator.checkoutDirectory(for: id, projectURL: locatorProjectURL)
+            case .local(let path):
+                dir = localDirectory(
+                    path: path,
+                    relativeTo: (declaringProjects[id] ?? projectURL).deletingLastPathComponent()
+                )
+            }
             if dir == nil {
                 // A direct ref with no checkout means the user resolved deps in Xcode
                 // but the checkout directory isn't where we expected. Most common cause:
@@ -331,9 +339,8 @@ public struct GraphBuilder: Sendable {
         }
         edges[rootIdentity] = rootOutgoing
 
-        // 4. Walk transitively. Same loop shape as the SwiftPM path, with two
-        //    differences: sourceControl deps are resolved via the locator, and
-        //    fileSystem deps cannot be resolved at all (see Limitations above).
+        // 4. Walk transitively, locating remote checkouts through Xcode and local
+        //    dependencies relative to the manifest that declares them.
         while !queue.isEmpty {
             let (identity, directory) = queue.removeFirst()
             if visited.contains(identity) { continue }
@@ -366,11 +373,8 @@ public struct GraphBuilder: Sendable {
                     case .registry:
                         depDir = nil
                     case .fileSystem:
-                        // Local-path transitive dep. We have no path to follow — see
-                        // the type doc. Mark as missing so the user knows the graph
-                        // walk stopped here.
-                        depDir = nil
-                        missing.append(depIdentity)
+                        depDir = localDirectory(path: dep.path, relativeTo: dir)
+                        if depDir == nil { missing.append(depIdentity) }
                     case .sourceControl:
                         depDir = locator.checkoutDirectory(
                             for: depIdentity,
@@ -403,11 +407,12 @@ public struct GraphBuilder: Sendable {
     /// is added with no outgoing edges.
     private func checkoutDirectory(
         for identity: String,
-        kind: ManifestDump.Dependency.Kind,
+        dependency: ManifestDump.Dependency,
+        declaringDirectory: URL,
         rootDirectory: URL,
         pinByIdentity: [String: ResolvedFile.Pin]
     ) -> URL? {
-        switch kind {
+        switch dependency.kind {
         case .registry:
             // Registry packages have no `.swift` to load locally. Caller treats nil as
             // "edge-less node", which is correct: a registry leaf with no deps is the
@@ -415,13 +420,7 @@ public struct GraphBuilder: Sendable {
             return nil
 
         case .fileSystem:
-            // Local-path dependency. The pin's `location` is the path on disk (absolute
-            // or relative to the root manifest). If we have a pin, use it; otherwise we
-            // can't help.
-            guard let pin = pinByIdentity[identity] else { return nil }
-            let url = URL(fileURLWithPath: pin.location, relativeTo: rootDirectory)
-                .standardizedFileURL
-            return fm.fileExists(atPath: url.path) ? url : nil
+            return localDirectory(path: dependency.path, relativeTo: declaringDirectory)
 
         case .sourceControl:
             // Modern SPM (5.5+) stores checkouts in `.build/checkouts/<identity>/`. Older
@@ -455,5 +454,12 @@ public struct GraphBuilder: Sendable {
 
             return nil
         }
+    }
+
+    private func localDirectory(path: String?, relativeTo directory: URL) -> URL? {
+        guard let path else { return nil }
+        let base = URL(fileURLWithPath: directory.path, isDirectory: true)
+        let url = URL(fileURLWithPath: path, relativeTo: base).standardizedFileURL
+        return fm.fileExists(atPath: url.appendingPathComponent("Package.swift").path) ? url : nil
     }
 }

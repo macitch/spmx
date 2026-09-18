@@ -134,23 +134,10 @@ extension ManifestEditor {
         var identities: [String] = []
         for element in array.elements {
             guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package" else {
+                  let identity = Self.packageIdentity(from: call) else {
                 continue
             }
-            // .package(url: "...", ...)
-            if let urlArg = Self.argument(labeled: "url", in: call),
-               let urlString = Self.plainStringLiteral(urlArg.expression) {
-                identities.append(XcodePackageReference.identity(forRepositoryURL: urlString))
-                continue
-            }
-            // .package(path: "...", ...)
-            if let pathArg = Self.argument(labeled: "path", in: call),
-               let pathString = Self.plainStringLiteral(pathArg.expression) {
-                let lastComponent = (pathString as NSString).lastPathComponent
-                identities.append(lastComponent.lowercased())
-                continue
-            }
+            identities.append(identity)
         }
         return identities
     }

@@ -55,6 +55,9 @@ public struct ManifestDump: Sendable, Equatable, Codable {
     public struct Dependency: Sendable, Equatable, Codable {
         public let identity: String
         public let kind: Kind
+        /// Local dependency path from dump-package, relative to its declaring package
+        /// when SwiftPM has not already expanded it to an absolute path.
+        public let path: String?
 
         public enum Kind: String, Sendable, Equatable, Codable {
             case sourceControl
@@ -62,9 +65,10 @@ public struct ManifestDump: Sendable, Equatable, Codable {
             case registry
         }
 
-        public init(identity: String, kind: Kind) {
+        public init(identity: String, kind: Kind, path: String? = nil) {
             self.identity = identity
             self.kind = kind
+            self.path = path
         }
     }
 
@@ -159,6 +163,7 @@ public struct ManifestDump: Sendable, Equatable, Codable {
 
         struct DetailsWithIdentity: Decodable {
             let identity: String
+            let path: String?
         }
 
         func resolved() -> Dependency? {
@@ -166,7 +171,7 @@ public struct ManifestDump: Sendable, Equatable, Codable {
                 return Dependency(identity: first.identity, kind: .sourceControl)
             }
             if let first = fileSystem?.first {
-                return Dependency(identity: first.identity, kind: .fileSystem)
+                return Dependency(identity: first.identity, kind: .fileSystem, path: first.path)
             }
             if let first = registry?.first {
                 return Dependency(identity: first.identity, kind: .registry)

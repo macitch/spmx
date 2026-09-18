@@ -65,6 +65,9 @@ struct ManifestDumpTests {
 
         let kinds = dump.dependencies.map(\.kind)
         #expect(kinds == [.sourceControl, .fileSystem, .registry])
+        #expect(dump.dependencies[1].path == "../local-pkg")
+        let cached = try JSONEncoder().encode(dump)
+        #expect(try JSONDecoder().decode(ManifestDump.self, from: cached) == dump)
     }
 
     @Test("ignores unknown top-level fields")

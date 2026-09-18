@@ -105,17 +105,76 @@ struct ManifestWriteGuardTests {
         #expect(err.description.contains("restored"))
         #expect(err.description.contains("something broke"))
     }
+
+    @Test("revert failure surfaces honestly — does not claim restoration that didn't happen")
+    func revertFailureSurfaced() async throws {
+        let url = try stageManifest(originalManifest)
+        let parent = url.deletingLastPathComponent()
+        defer {
+            // Restore writability for cleanup, then nuke the staging dir.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: parent.path
+            )
+            cleanup(url)
+        }
+
+        // Fake runner returns failure AND, before returning, makes the parent
+        // directory read-only so the subsequent atomic-revert write fails.
+        // `String.write(to:, atomically: true, ...)` writes via a temp file in
+        // the parent dir, so a read-only parent reliably breaks the revert.
+        let fake = FakeGuardRunner(
+            exitCode: 1,
+            stderr: "error: dependency resolution failed",
+            onRun: {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o555],
+                    ofItemAtPath: parent.path
+                )
+            }
+        )
+        let guard_ = ManifestWriteGuard(runner: fake)
+        let editor = try ManifestEditor.parse(source: editedManifest)
+
+        do {
+            try await guard_.writeAndResolve(editor: editor, to: url)
+            Issue.record("expected ResolveFailure")
+        } catch let err as ManifestWriteGuard.ResolveFailure {
+            // The error must NOT claim restoration succeeded when it didn't.
+            #expect(
+                err.revertError != nil,
+                "expected revertError to be populated when revert fails"
+            )
+            #expect(
+                !err.description.contains("has been restored"),
+                "description must not claim restoration when revert failed"
+            )
+            #expect(
+                err.description.contains("Package.swift") ||
+                err.description.contains("revert"),
+                "description should mention the manifest is in the edited state or that revert failed"
+            )
+        }
+    }
 }
 
 /// Test double for `ProcessRunning` used by ManifestWriteGuard tests.
 private actor FakeGuardRunner: ProcessRunning {
     private let result: ProcessResult
+    private let onRun: (@Sendable () -> Void)?
 
-    init(exitCode: Int32 = 0, stdout: String = "", stderr: String = "") {
+    init(
+        exitCode: Int32 = 0,
+        stdout: String = "",
+        stderr: String = "",
+        onRun: (@Sendable () -> Void)? = nil
+    ) {
         self.result = ProcessResult(exitCode: exitCode, stdout: stdout, stderr: stderr)
+        self.onRun = onRun
     }
 
     func run(_ executable: String, arguments: [String]) async throws -> ProcessResult {
-        result
+        onRun?()
+        return result
     }
 }

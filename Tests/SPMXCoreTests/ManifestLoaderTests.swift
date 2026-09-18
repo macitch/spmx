@@ -6,11 +6,43 @@
  */
 
 import Foundation
+import CryptoKit
 import Testing
 @testable import SPMXCore
 
 @Suite("DiskCachedManifestLoader")
 struct ManifestLoaderTests {
+
+    @Test("legacy cache entries that omitted local paths are not reused")
+    func legacyCacheIsInvalidated() async throws {
+        let (pkg, cache) = try stage()
+        defer { try? FileManager.default.removeItem(at: pkg.deletingLastPathComponent()) }
+        let data = try Data(contentsOf: pkg.appendingPathComponent("Package.swift"))
+        let oldKey = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let oldDump = ManifestDump(name: "Stale", dependencies: [.init(identity: "local", kind: .fileSystem)])
+        try JSONEncoder().encode(oldDump).write(to: cache.appendingPathComponent("\(oldKey).json"))
+        let runner = FakeProcessRunner(response: .success(.init(exitCode: 0, stdout: sampleDumpJSON, stderr: "")))
+        let result = try await DiskCachedManifestLoader(runner: runner, cacheDirectory: cache).load(packageDirectory: pkg)
+        #expect(result.name == "Fixture")
+        #expect(result.dependencies[1].path == "../local")
+        #expect(await runner.callCount() == 1)
+    }
+
+    @Test("identical manifests in different directories do not share absolute local paths")
+    func cacheIsScopedToPackageDirectory() async throws {
+        let (pkg, cache) = try stage()
+        defer { try? FileManager.default.removeItem(at: pkg.deletingLastPathComponent()) }
+        let other = pkg.deletingLastPathComponent().appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: pkg.appendingPathComponent("Package.swift"), to: other.appendingPathComponent("Package.swift"))
+        let runner = FakeProcessRunner(response: .success(.init(exitCode: 0, stdout: sampleDumpJSON, stderr: "")))
+        let loader = DiskCachedManifestLoader(runner: runner, cacheDirectory: cache)
+        _ = try await loader.load(packageDirectory: pkg)
+        _ = try await loader.load(packageDirectory: other)
+        let cached = try await loader.load(packageDirectory: other)
+        #expect(await runner.callCount() == 2)
+        #expect(cached.dependencies[1].path == "../local")
+    }
 
     // MARK: - Fake runner
 

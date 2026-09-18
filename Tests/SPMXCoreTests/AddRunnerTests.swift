@@ -131,7 +131,7 @@ private func makeRunner(
 ) -> AddRunner {
     AddRunner(
         resolveURL: { _, _ in resolvedURL },
-        fetchMetadata: { _ in metadata },
+        fetchMetadata: { _, _ in metadata },
         fetchLatestVersion: { _ in latestVersion }
     )
 }
@@ -196,7 +196,7 @@ struct AddRunnerTests {
                 await tracker.markCalled()
                 return "should not be called"
             },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in Semver("1.0.0") }
         )
         let output = try await runner.run(options: .init(
@@ -220,7 +220,7 @@ struct AddRunnerTests {
                 await tracker.markCalled()
                 return "should not be called"
             },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in Semver("1.0.0") }
         )
         let output = try await runner.run(options: .init(
@@ -242,7 +242,7 @@ struct AddRunnerTests {
         let tracker = CallTracker()
         let runner = AddRunner(
             resolveURL: { _, _ in "https://github.com/pointfreeco/swift-snapshot-testing" },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in
                 await tracker.markCalled()
                 return Semver("99.0.0")
@@ -320,7 +320,7 @@ struct AddRunnerTests {
 
         let runner = AddRunner(
             resolveURL: { _, _ in "https://github.com/example/x" },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in nil }
         )
 
@@ -481,7 +481,7 @@ struct AddRunnerTests {
         let versionTracker = CallTracker()
         let runner = AddRunner(
             resolveURL: { _, _ in "https://github.com/Alamofire/Alamofire.git" },
-            fetchMetadata: { _ in
+            fetchMetadata: { _, _ in
                 await metadataTracker.markCalled()
                 return singleLibraryMetadata
             },
@@ -681,7 +681,7 @@ struct AddRunnerTests {
                     ]
                 )
             },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in Semver("1.15.0") },
             interactiveChooser: { _, _ in
                 await chooserCalled.markCalled()
@@ -714,7 +714,7 @@ struct AddRunnerTests {
                     ]
                 )
             },
-            fetchMetadata: { _ in singleLibraryMetadata },
+            fetchMetadata: { _, _ in singleLibraryMetadata },
             fetchLatestVersion: { _ in Semver("1.0.0") }
             // No interactiveChooser — default nil.
         )

@@ -12,6 +12,50 @@ import Testing
 @Suite("GraphBuilder")
 struct GraphBuilderTests {
 
+    @Test("local paths are followed relative to each declaring manifest without local pins")
+    func nestedLocalDependencies() async throws {
+        let root = try stageRoot(checkoutNames: ["remote"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("packages/first", isDirectory: true)
+        let second = root.appendingPathComponent("packages/second", isDirectory: true)
+        for directory in [first, second] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data("// stub".utf8).write(to: directory.appendingPathComponent("Package.swift"))
+        }
+        let loader = StubManifestLoader(manifests: [
+            root.path: .init(name: "App", dependencies: [
+                .init(identity: "first", kind: .fileSystem, path: first.path),
+            ]),
+            first.path: .init(name: "First", dependencies: [
+                .init(identity: "second", kind: .fileSystem, path: "../second"),
+            ]),
+            second.path: dump(name: "Second", deps: [("remote", .sourceControl)]),
+            root.appendingPathComponent(".build/checkouts/remote").path: dump(name: "Remote"),
+        ])
+        let result = await GraphBuilder(manifestLoader: loader).build(
+            rootDirectory: root, resolved: .init(version: 3, pins: [pin("remote")])
+        )
+        #expect(result.graph.paths(to: "remote") == [["app", "first", "second", "remote"]])
+        #expect(!result.hadMissingManifests)
+    }
+
+    @Test("missing local manifests are reported as incomplete", arguments: [nil, "missing"] as [String?])
+    func missingLocalDependency(path: String?) async throws {
+        let root = try stageRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let loader = StubManifestLoader(manifests: [
+            root.path: .init(name: "App", dependencies: [
+                .init(identity: "local", kind: .fileSystem, path: path),
+            ]),
+        ])
+        let result = await GraphBuilder(manifestLoader: loader).build(
+            rootDirectory: root, resolved: .init(version: 3, pins: [])
+        )
+        #expect(result.graph.paths(to: "local") == [["app", "local"]])
+        #expect(result.hadMissingManifests)
+        #expect(result.missingIdentities == ["local"])
+    }
+
     // MARK: - Stub loader
 
     /// In-memory `ManifestLoading` keyed by directory path. Tests register the manifests

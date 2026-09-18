@@ -127,12 +127,20 @@ public struct GitVersionFetcher: VersionFetching {
                 group.addTask { await self.fetchOne(pin) }
             }
 
-            // Drain and refill: every completion frees a slot for the next pin.
+            // Drain and refill. On parent-task cancellation, stop adding new work
+            // and cancel pending child tasks — the underlying SystemProcessRunner
+            // honors cancellation by sending SIGTERM, so child tasks return
+            // quickly with `.fetchFailed` (their catch swallows CancellationError
+            // since this function deliberately returns failure-as-data). Partial
+            // results are still surfaced to the caller, which can detect
+            // truncation via `Task.isCancelled` post-return.
             while let (identity, result) = await group.next() {
                 results[identity] = result
                 completed += 1
                 onPinComplete?(completed, total)
-                if let pin = iterator.next() {
+                if Task.isCancelled {
+                    group.cancelAll()
+                } else if let pin = iterator.next() {
                     group.addTask { await self.fetchOne(pin) }
                 }
             }

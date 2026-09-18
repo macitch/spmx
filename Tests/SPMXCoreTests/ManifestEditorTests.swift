@@ -386,6 +386,28 @@ struct ManifestEditorRemovingDependencyTests {
             _ = try editor.removingDependency(identity: "alamofire")
         }
     }
+
+    @Test("removes a local .package(path:) entry by its directory-name identity")
+    func removesLocalPathDep() throws {
+        let output = try ManifestEditor.parse(source: mixedLocalAndRemoteManifest)
+            .removingDependency(identity: "sharedlib")
+            .serialize()
+
+        #expect(!output.contains(".package(path:"))
+        #expect(!output.contains("SharedLib"))
+        // Sibling remote dep untouched.
+        #expect(output.contains("Alamofire.git"))
+        // Result parses.
+        _ = try ManifestEditor.parse(source: output)
+    }
+
+    @Test("local path identity match is case-insensitive against directory name")
+    func localPathCaseInsensitive() throws {
+        let output = try ManifestEditor.parse(source: mixedLocalAndRemoteManifest)
+            .removingDependency(identity: "SharedLib")
+            .serialize()
+        #expect(!output.contains(".package(path:"))
+    }
 }
 
 // MARK: - removingPackageCompletely
@@ -696,6 +718,46 @@ struct ManifestEditorRemovingPackageCompletelyTests {
         // SwiftSyntax attaches the comment differently and the README needs a note.
         #expect(!removingBottom.contains("--- Apple packages below ---"))
         _ = try ManifestEditor.parse(source: removingBottom)
+    }
+
+    @Test("removes a local .package(path:) entry and its target product references")
+    func removesLocalPathPackageCompletely() throws {
+        let src = """
+        // swift-tools-version: 5.9
+        import PackageDescription
+
+        let package = Package(
+            name: "Mixed",
+            dependencies: [
+                .package(path: "../SharedLib"),
+                .package(url: "https://github.com/Alamofire/Alamofire.git", from: "5.8.0"),
+            ],
+            targets: [
+                .target(
+                    name: "Mixed",
+                    dependencies: [
+                        .product(name: "SharedLib", package: "SharedLib"),
+                        .product(name: "Alamofire", package: "Alamofire"),
+                    ]
+                ),
+            ]
+        )
+        """
+        let removal = try ManifestEditor.parse(source: src)
+            .removingPackageCompletely(identity: "sharedlib")
+        let output = removal.editor.serialize()
+
+        // Top-level path entry gone.
+        #expect(!output.contains(".package(path:"))
+        // Target product reference gone.
+        #expect(!output.contains(".product(name: \"SharedLib\""))
+        // Sibling dep and its product preserved.
+        #expect(output.contains("Alamofire.git"))
+        #expect(output.contains(".product(name: \"Alamofire\""))
+        // Affected target reported.
+        #expect(removal.affectedTargets == ["Mixed"])
+        // Result parses.
+        _ = try ManifestEditor.parse(source: output)
     }
 }
 

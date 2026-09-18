@@ -67,7 +67,14 @@ public final class XcodeCheckoutLocator: @unchecked Sendable {
     /// re-enumerate DerivedData on repeated misses for the same project.
     ///
     /// Keyed by canonicalized path string to avoid `/var` vs `/private/var` collisions.
+    ///
+    /// `@unchecked Sendable` on the enclosing class is honest only because every
+    /// access to this dictionary goes through `cacheLock`. Bypass the lock and the
+    /// next concurrent caller (e.g. a `TaskGroup` doing parallel pin lookups) will
+    /// corrupt it silently. The lock is `os_unfair_lock` — same pattern as
+    /// `DidTimeout` in `ProcessRunner.swift`.
     private var derivedDataCache: [String: URL?] = [:]
+    private var cacheLock = os_unfair_lock()
 
     /// - Parameter derivedDataRoot: Override for tests. Defaults to the custom
     ///   DerivedData location from Xcode preferences (if configured), falling back
@@ -143,13 +150,30 @@ public final class XcodeCheckoutLocator: @unchecked Sendable {
     /// workspace). Returns `nil` if no match exists or DerivedData doesn't exist.
     private func resolveDerivedData(for projectURL: URL) -> URL? {
         let key = canonicalPath(projectURL)
-        if let cached = derivedDataCache[key] {
+        if let cached = cachedDerivedData(forKey: key) {
             return cached
         }
 
+        // Enumerate outside the lock — directory I/O can be slow and we don't
+        // want every concurrent caller serialized through it. The cost of a
+        // racing double-enumeration on the first miss for a given project is
+        // O(DerivedData entries) and both calls produce the same answer, so
+        // we just let the last writer win.
         let resolved = enumerateDerivedData(matching: projectURL)
-        derivedDataCache[key] = resolved
+        storeDerivedData(resolved, forKey: key)
         return resolved
+    }
+
+    private func cachedDerivedData(forKey key: String) -> URL?? {
+        os_unfair_lock_lock(&cacheLock)
+        defer { os_unfair_lock_unlock(&cacheLock) }
+        return derivedDataCache[key]
+    }
+
+    private func storeDerivedData(_ value: URL?, forKey key: String) {
+        os_unfair_lock_lock(&cacheLock)
+        derivedDataCache[key] = value
+        os_unfair_lock_unlock(&cacheLock)
     }
 
     private func enumerateDerivedData(matching projectURL: URL) -> URL? {

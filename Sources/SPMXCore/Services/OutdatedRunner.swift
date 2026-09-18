@@ -24,7 +24,7 @@ public struct OutdatedRunner: Sendable {
         public let direct: Bool
         /// Package identities to suppress from the output. Matched case-insensitively.
         public let ignore: Set<String>
-        /// When `true`, render JSON instead of a table. JSON is always unfiltered.
+        /// When `true`, render all statuses as JSON, after applying direct/ignore filters.
         public let json: Bool
         /// Caller's decision on color. The runner does not touch TTY or env globals itself.
         public let colorEnabled: Bool
@@ -45,8 +45,8 @@ public struct OutdatedRunner: Sendable {
         }
     }
 
-    /// Result of a run. `rows` is the full unfiltered, sorted set so callers (and tests)
-    /// can inspect the underlying data; `rendered` is what should go to stdout.
+    /// Result of a run. `rows` includes all statuses after applying direct/ignore filters,
+    /// sorted by identity; `rendered` is what should go to stdout.
     public struct Output: Sendable, Equatable {
         public let rows: [OutdatedRow]
         public let rendered: String

@@ -216,6 +216,68 @@ struct XcodeCheckoutLocatorTests {
         #expect(found?.lastPathComponent == "KeychainAccess")
     }
 
+    @Test("concurrent lookups across multiple projects produce consistent, correct results")
+    func concurrentAccess() async throws {
+        // Without locking, the per-instance `derivedDataCache` is a [String: URL?]
+        // mutated unguarded from any caller. This test fires many concurrent
+        // `checkoutDirectory` calls against the *same* locator instance with a mix
+        // of projects, exercising the read-modify-write path on the cache. With
+        // proper locking, every lookup returns the right answer; without it, the
+        // dictionary state is corruptible and (under TSan) racy.
+        let stage = try Stage()
+        defer { stage.cleanup() }
+
+        // Five distinct projects, each with its own DerivedData entry and checkout.
+        let projectCount = 5
+        var projects: [URL] = []
+        var expectedCheckouts: [URL] = []
+        for i in 0..<projectCount {
+            let project = try stage.makeProject(named: "App\(i).xcodeproj")
+            let derived = try stage.makeDerivedData(
+                named: "App\(i)-abc\(i)",
+                workspacePath: project.path
+            )
+            try stage.makeCheckout(in: derived, identity: "alamofire")
+            projects.append(project)
+            expectedCheckouts.append(
+                derived.appendingPathComponent("SourcePackages/checkouts/alamofire")
+            )
+        }
+
+        let locator = XcodeCheckoutLocator(derivedDataRoot: stage.derivedDataRoot)
+        let derivedDataRoot = stage.derivedDataRoot
+
+        // 200 concurrent tasks, each picking a project at random and looking it up.
+        await withTaskGroup(of: (Int, URL?).self) { group in
+            for taskIndex in 0..<200 {
+                let projectIndex = taskIndex % projectCount
+                let project = projects[projectIndex]
+                group.addTask {
+                    let found = locator.checkoutDirectory(
+                        for: "alamofire",
+                        projectURL: project
+                    )
+                    return (projectIndex, found)
+                }
+            }
+
+            for await (projectIndex, found) in group {
+                #expect(found != nil, "lookup returned nil for project \(projectIndex)")
+                if let found {
+                    let expected = expectedCheckouts[projectIndex]
+                    #expect(
+                        found.resolvingSymlinksInPath().standardizedFileURL.path
+                            == expected.resolvingSymlinksInPath().standardizedFileURL.path,
+                        "lookup for project \(projectIndex) returned wrong checkout"
+                    )
+                }
+            }
+        }
+
+        // Sanity: derivedDataRoot was used (silences unused warning under some configs)
+        _ = derivedDataRoot
+    }
+
     @Test("info.plist with no WorkspacePath is silently skipped")
     func infoPlistMissingWorkspacePath() throws {
         let stage = try Stage()

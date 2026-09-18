@@ -207,14 +207,15 @@ public struct WhyRunner: Sendable {
     /// the root `Package.swift` walked via `.build/checkouts`. Identical to the original
     /// `WhyRunner.run` behaviour before the Xcode pivot.
     private func runSwiftPM(rootDirectory: URL) async throws -> GraphBuildResult {
-        guard let resolvedURL = parser.locate(in: rootDirectory) else {
-            throw Error.packageResolvedNotFound(directory: rootDirectory.path)
-        }
-        let file: ResolvedFile
-        do {
-            file = try parser.parse(at: resolvedURL)
-        } catch let err as ResolvedParser.Error {
-            throw Error.parseFailed(err.description)
+        // SwiftPM does not create a lockfile for a graph containing only local
+        // packages. Their paths are available in manifest dumps without any pins.
+        var file = ResolvedFile(version: 3, pins: [])
+        if let resolvedURL = parser.locate(in: rootDirectory) {
+            do {
+                file = try parser.parse(at: resolvedURL)
+            } catch let err as ResolvedParser.Error {
+                throw Error.parseFailed(err.description)
+            }
         }
         return await graphBuilder.build(rootDirectory: rootDirectory, resolved: file)
     }

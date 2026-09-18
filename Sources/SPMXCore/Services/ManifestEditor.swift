@@ -479,23 +479,44 @@ public struct ManifestEditor: @unchecked Sendable {
         return array.with(\.elements, ArrayElementListSyntax(mutableElements))
     }
 
-    /// Remove the `.package(url:, ...)` element whose URL has the given SPM
-    /// identity. Returns the original array unchanged if no such element exists
-    /// (callers should pre-check presence; this is a helper for the atomic
-    /// `removingPackageCompletely` flow which has already validated existence).
+    /// Extract the normalized SPM identity from a `.package(url:, ...)` or
+    /// `.package(path:, ...)` call expression, or `nil` if `call` isn't a
+    /// `.package(...)` call we can derive an identity from. Identity rules
+    /// match `listDependencyIdentities`:
+    ///   - URL form: last path component, `.git` stripped, lowercased
+    ///     (via `XcodePackageReference.identity(forRepositoryURL:)`).
+    ///   - Path form: last path component of the path, lowercased.
+    static func packageIdentity(from call: FunctionCallExprSyntax) -> String? {
+        guard let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+              member.declName.baseName.text == "package" else {
+            return nil
+        }
+        if let urlArg = Self.argument(labeled: "url", in: call),
+           let url = Self.plainStringLiteral(urlArg.expression) {
+            return XcodePackageReference.identity(forRepositoryURL: url)
+        }
+        if let pathArg = Self.argument(labeled: "path", in: call),
+           let path = Self.plainStringLiteral(pathArg.expression) {
+            return (path as NSString).lastPathComponent.lowercased()
+        }
+        return nil
+    }
+
+    /// Remove the `.package(...)` element — `url:` or `path:` form — whose SPM
+    /// identity matches. Returns the original array unchanged if no such element
+    /// exists (callers should pre-check presence; this is a helper for the
+    /// atomic `removingPackageCompletely` flow which has already validated
+    /// existence).
     static func removingPackageElement(
         withIdentity identity: String,
         from array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
         let filtered = array.elements.filter { element in
             guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package",
-                  let urlArg = Self.argument(labeled: "url", in: call),
-                  let url = Self.plainStringLiteral(urlArg.expression) else {
+                  let elementIdentity = Self.packageIdentity(from: call) else {
                 return true  // keep anything we can't parse
             }
-            return XcodePackageReference.identity(forRepositoryURL: url) != identity
+            return elementIdentity != identity
         }
         return array.with(\.elements, filtered)
     }
@@ -506,15 +527,15 @@ public struct ManifestEditor: @unchecked Sendable {
     /// left untouched. Used by `removingPackageCompletely` to sweep all references
     /// from a target in one batched filter pass.
     static func removingProducts(
-        matchingPackage package: String,
+        matchingPackages packages: Set<String>,
         from array: ArrayExprSyntax
     ) -> ArrayExprSyntax {
-        let normalizedPkg = package.lowercased()
+        let normalizedPackages = Set(packages.map { $0.lowercased() })
         let filtered = array.elements.filter { element in
             guard let (_, pkg) = Self.productNameAndPackage(from: element.expression) else {
                 return true  // not a .product(...) — keep
             }
-            return pkg.lowercased() != normalizedPkg
+            return !normalizedPackages.contains(pkg.lowercased())
         }
         return array.with(\.elements, filtered)
     }

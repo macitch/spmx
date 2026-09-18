@@ -213,8 +213,6 @@ public struct RemoveRunner: Sendable {
                     try await guard_.writeAndResolve(editor: removal.editor, to: manifestURL)
                 } catch let err as ManifestEditor.Error {
                     throw Self.mapEditorError(err, path: manifestURL.path)
-                } catch let err as ManifestWriteGuard.ResolveFailure {
-                    throw Error.parseFailed(err.stderr)
                 }
             } else {
                 do {

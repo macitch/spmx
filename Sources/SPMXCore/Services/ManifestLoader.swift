@@ -72,9 +72,9 @@ public enum ManifestLoaderError: Swift.Error, CustomStringConvertible, Equatable
 /// `.package(url:)` deps. But spmx also needs to load the *root* package's manifest (which
 /// is not a git dependency at all, just whatever directory the user is in), and dependencies
 /// can also be `.package(path:)` local references. Neither has a git revision. File-content
-/// SHA-256 is the one key that works for all three cases and naturally invalidates on
-/// every edit. SHA-256 on a 4 KB Package.swift is sub-millisecond, so the extra hash is
-/// noise compared to the savings on subsequent runs.
+/// SHA-256 covers a cache schema version, the package's canonical directory, and the
+/// manifest contents. The directory keeps absolute local paths from leaking between
+/// packages with identical manifests. Editing the manifest invalidates its cache.
 ///
 /// ## Cache layout
 ///
@@ -130,7 +130,12 @@ public struct DiskCachedManifestLoader: ManifestLoading {
         // 1. Hash the manifest file contents. SHA-256 because CryptoKit ships with the OS
         //    and we don't need to add a dependency for what amounts to a cache key.
         let data = try Data(contentsOf: manifestURL)
-        let sha = Self.sha256Hex(of: data)
+        // v2 invalidates older dumps that discarded local dependency paths. Include
+        // the directory because dump-package can expand relative paths to absolute
+        // ones; identical manifests in different packages must not share that result.
+        var cacheKey = Data("v2\u{0}\(packageDirectory.resolvingSymlinksInPath().standardizedFileURL.path)\u{0}".utf8)
+        cacheKey.append(data)
+        let sha = Self.sha256Hex(of: cacheKey)
         let cachedFile = cacheDirectory.appendingPathComponent("\(sha).json")
 
         // 2. Fast path: cache hit.

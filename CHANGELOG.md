@@ -2,6 +2,25 @@
 
 All notable changes to [`spmx`](https://github.com/macitch/spmx) are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-09-18
+
+### Fixed
+
+- Drain subprocess stdout and stderr during execution to prevent pipe-buffer deadlocks; use termination callbacks for asynchronous completion.
+- Wire added products with the repository identity, including packages whose manifest name differs from the repository name.
+- Discover products at the requested tag, branch, or revision. Version ranges select the newest matching tag, including `v`-prefixed tags.
+- Remove product references using explicit package aliases as well as repository identities.
+- Follow local dependency paths through SwiftPM and Xcode graphs, report missing local manifests, and support local-only graphs without a lockfile. Refresh older manifest caches that omitted local paths.
+- Preserve resolution and rollback failure details in both `add` and `remove` errors.
+- Honor subprocess cancellation and stop scheduling version lookups after cancellation.
+- Remove local `.package(path:)` dependencies consistently with dependency inspection.
+- Synchronize Xcode checkout-cache access for concurrent lookups.
+
+### Changed
+
+- **Breaking (SPMXCore):** `AddRunner`'s injected `fetchMetadata` closure now receives the version requirement as its second argument: `(url, requirement)`. Update custom closures to accept both arguments. CLI flags are unchanged.
+- Correct README and CLI help descriptions of native SwiftPM commands, supported flags, JSON filtering, exit statuses, graph limits, and manifest rollback behavior. Make source installation independent of SwiftPM's build-directory layout.
+
 ## [0.1.1] — 2026-04-16
 
 ### Changed

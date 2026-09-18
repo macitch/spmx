@@ -13,7 +13,7 @@ import Foundation
 ///   1. Resolve the user input to a repository URL (catalog lookup or direct URL).
 ///   2. Check the local manifest doesn't already contain this package.
 ///   3. Resolve the version (user-supplied or auto-detected from `git ls-remote`).
-///   4. Fetch remote manifest metadata (shallow clone + `dump-package`) to discover products.
+///   4. Fetch remote manifest metadata at the selected ref to discover products.
 ///   5. Pick a product (auto if exactly one library, or user-supplied `--product`).
 ///   6. Pick a target (auto if exactly one non-test target, or user-supplied `--target`).
 ///   7. Atomically add the top-level dependency AND wire the product into the target.
@@ -23,7 +23,7 @@ import Foundation
 ///
 /// Three top-level dependencies are injected as closures rather than protocols:
 ///   - `resolveURL`: name → URL (wraps `PackageListResolver`)
-///   - `fetchMetadata`: URL → `ManifestFetcher.Metadata` (wraps `ManifestFetcher`)
+///   - `fetchMetadata`: URL + requirement → `ManifestFetcher.Metadata` (wraps `ManifestFetcher`)
 ///   - `fetchLatestVersion`: URL → `Semver?` (wraps `git ls-remote --tags` + `parseTags`)
 ///
 /// Closures keep the injection surface razor-thin — tests provide one-liner fakes
@@ -265,9 +265,7 @@ public struct AddRunner: Sendable {
                 """
             case .fetchMetadataFailed(let msg):
                 return """
-                Failed to fetch package metadata: \(msg). Check your network connection. If the \
-                package is reachable but the error persists, pass `--product <name>` to skip \
-                metadata discovery.
+                Failed to fetch package metadata: \(msg)
                 """
             case .parseFailed(let msg):
                 return """
@@ -294,8 +292,8 @@ public struct AddRunner: Sendable {
     private let resolveURL: @Sendable (String, Bool) async throws -> String
 
     /// Fetch remote manifest metadata (package name + products).
-    /// Signature: (url) -> Metadata.
-    private let fetchMetadata: @Sendable (String) async throws -> ManifestFetcher.Metadata
+    /// Signature: (url, requirement) -> Metadata at the selected version or ref.
+    private let fetchMetadata: @Sendable (String, ManifestEditor.VersionRequirement) async throws -> ManifestFetcher.Metadata
 
     /// Fetch the latest stable semver tag for a URL.
     /// Signature: (url) -> Semver? (nil = no tags found).
@@ -318,7 +316,7 @@ public struct AddRunner: Sendable {
 
     public init(
         resolveURL: @escaping @Sendable (String, Bool) async throws -> String = defaultResolveURL,
-        fetchMetadata: @escaping @Sendable (String) async throws -> ManifestFetcher.Metadata = defaultFetchMetadata,
+        fetchMetadata: @escaping @Sendable (String, ManifestEditor.VersionRequirement) async throws -> ManifestFetcher.Metadata = defaultFetchMetadata,
         fetchLatestVersion: @escaping @Sendable (String) async throws -> Semver? = defaultFetchLatestVersion,
         interactiveChooser: (@Sendable (String, [PackageListResolver.Match]) async throws -> String)? = nil,
         writeGuard: ManifestWriteGuard? = nil
@@ -338,9 +336,9 @@ public struct AddRunner: Sendable {
         return match.url
     }
 
-    /// Wire to real `ManifestFetcher.fetch(url:)`.
-    public static let defaultFetchMetadata: @Sendable (String) async throws -> ManifestFetcher.Metadata = { url in
-        try await ManifestFetcher().fetch(url: url)
+    /// Fetch metadata from the requested version, branch, or revision.
+    public static let defaultFetchMetadata: @Sendable (String, ManifestEditor.VersionRequirement) async throws -> ManifestFetcher.Metadata = { url, requirement in
+        try await ManifestFetcher().fetch(url: url, requirement: requirement)
     }
 
     /// Wire to real `git ls-remote --tags` via `SystemProcessRunner`.
@@ -407,7 +405,7 @@ public struct AddRunner: Sendable {
         print("Fetching package metadata…", terminator: "")
         let metadata: ManifestFetcher.Metadata
         do {
-            metadata = try await fetchMetadata(resolvedURL)
+            metadata = try await fetchMetadata(resolvedURL, requirement)
         } catch {
             print(" failed")
             throw Error.fetchMetadataFailed(String(describing: error))
@@ -433,7 +431,7 @@ public struct AddRunner: Sendable {
                 url: resolvedURL,
                 requirement: requirement,
                 productName: chosenProduct,
-                packageIdentity: metadata.packageName,
+                packageIdentity: identity,
                 target: chosenTarget
             )
         } catch let err as ManifestEditor.Error {
@@ -449,8 +447,6 @@ public struct AddRunner: Sendable {
                     try await guard_.writeAndResolve(editor: edited, to: manifestURL)
                 } catch let err as ManifestEditor.Error {
                     throw Self.mapEditorError(err)
-                } catch let err as ManifestWriteGuard.ResolveFailure {
-                    throw Error.resolveFailed(err.stderr)
                 }
             } else {
                 do {
@@ -700,9 +696,10 @@ public struct AddRunner: Sendable {
         dryRun: Bool
     ) -> String {
         var lines: [String] = []
+        let identity = XcodePackageReference.identity(forRepositoryURL: url)
         lines.append("Adding: \(packageName) (\(version))")
         lines.append("✓ Added .package(url: \"\(url)\", \(version)) to Package.swift")
-        lines.append("✓ Wired .product(name: \"\(productName)\", package: \"\(packageName)\") into target \"\(targetName)\"")
+        lines.append("✓ Wired .product(name: \"\(productName)\", package: \"\(identity)\") into target \"\(targetName)\"")
         if dryRun {
             lines.append("[dry-run] no files written")
         }

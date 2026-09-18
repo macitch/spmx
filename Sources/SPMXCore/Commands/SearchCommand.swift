@@ -17,10 +17,10 @@ public struct SearchCommand: AsyncParsableCommand {
     @Argument(help: "Search term to match against package names.")
     public var query: String
 
-    @Flag(help: "Output as JSON for scripting.")
+    @Flag(help: "Output every match as JSON, regardless of --limit.")
     public var json: Bool = false
 
-    @Option(help: "Maximum number of results to display. Use 0 for unlimited.")
+    @Option(help: "Maximum number of table rows to display. Use 0 for unlimited.")
     public var limit: Int = 20
 
     @Flag(help: "Bypass the 24-hour catalog cache and re-fetch the package list.")

@@ -23,7 +23,7 @@ public struct OutdatedCommand: AsyncParsableCommand {
     @Flag(help: "Only show direct dependencies (declared in Package.swift).")
     public var direct: Bool = false
 
-    @Flag(help: "Output as JSON for scripting. Always unfiltered.")
+    @Flag(help: "Output all statuses as JSON. Honors --direct and --ignore.")
     public var json: Bool = false
 
     @Option(
@@ -39,7 +39,7 @@ public struct OutdatedCommand: AsyncParsableCommand {
     @Flag(name: .customLong("no-color"), help: "Disable ANSI color output.")
     public var noColor: Bool = false
 
-    @Flag(name: .customLong("exit-code"), help: "Exit with non-zero status if any dependency is outdated. Useful for CI.")
+    @Flag(name: .customLong("exit-code"), help: "Exit 1 for any status other than up to date, including branch pins and unknown results.")
     public var exitCode: Bool = false
 
     public init() {}

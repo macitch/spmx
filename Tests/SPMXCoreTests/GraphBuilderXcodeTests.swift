@@ -12,6 +12,47 @@ import Testing
 @Suite("GraphBuilder.buildFromXcode")
 struct GraphBuilderXcodeTests {
 
+    @Test("local dependencies use their declaring project and manifest paths", arguments: [false, true])
+    func localPaths(inWorkspace: Bool) async throws {
+        let stage = try Stage()
+        defer { stage.cleanup() }
+        let project = try stage.makeProject(named: "App.xcodeproj", refs: [])
+        try """
+        { objects = { L = { isa = XCLocalSwiftPackageReference; relativePath = "Packages/local"; }; }; }
+        """.write(to: project.appendingPathComponent("project.pbxproj"), atomically: true, encoding: .utf8)
+        let local = project.deletingLastPathComponent().appendingPathComponent("Packages/local", isDirectory: true)
+        let leaf = local.deletingLastPathComponent().appendingPathComponent("leaf", isDirectory: true)
+        for directory in [local, leaf] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data("// stub".utf8).write(to: directory.appendingPathComponent("Package.swift"))
+        }
+        let input = try inWorkspace
+            ? stage.makeWorkspace(named: "Combined.xcworkspace", projects: [project])
+            : project
+        let loader = LocalManifestLoader(manifests: [
+            local.standardizedFileURL.path: .init(name: "Local", dependencies: [
+                .init(identity: "leaf", kind: .fileSystem, path: "../leaf"),
+            ]),
+            leaf.standardizedFileURL.path: .init(name: "Leaf", dependencies: []),
+        ])
+        let result = try await GraphBuilder(manifestLoader: loader).buildFromXcode(
+            projectURL: input, locator: XcodeCheckoutLocator(derivedDataRoot: stage.derivedDataRoot)
+        ).get()
+        let root = inWorkspace ? "combined" : "app"
+        #expect(result.graph.paths(to: "leaf") == [[root, "local", "leaf"]])
+        #expect(!result.hadMissingManifests)
+    }
+
+    private struct LocalManifestLoader: ManifestLoading {
+        let manifests: [String: ManifestDump]
+        func load(packageDirectory: URL) async throws -> ManifestDump {
+            guard let dump = manifests[packageDirectory.standardizedFileURL.path] else {
+                throw ManifestLoaderError.packageSwiftNotFound(packageDirectory)
+            }
+            return dump
+        }
+    }
+
     // MARK: - Happy paths
 
     @Test("single direct ref with no transitive deps")

@@ -39,15 +39,20 @@ public struct ProcessTimedOut: Error, LocalizedError, CustomStringConvertible, S
 
 /// Real `ProcessRunning` backed by `Foundation.Process`.
 ///
-/// Each call is dispatched onto a detached task so the synchronous `waitUntilExit()` doesn't
-/// block one of the cooperative pool's threads. That matters when `VersionFetcher` runs eight
-/// of these concurrently inside a `TaskGroup`.
+/// Completion uses Process's termination callback; blocking pipe reads run on Dispatch
+/// queues. Both output streams are drained while the child runs, so full pipe buffers
+/// cannot prevent it from exiting.
 ///
 /// Inherits the parent environment with one critical override: `GIT_TERMINAL_PROMPT=0`. Without
 /// this, an SSH-keyed pin to a private repo without credentials available would cause `git
 /// ls-remote` to *prompt* for a password, which from a non-interactive subprocess hangs forever.
 /// With the flag set, git fails fast and we surface a clean `.fetchFailed` row instead of
 /// burning a `TaskGroup` slot indefinitely.
+///
+/// ## Cancellation
+///
+/// On parent-task cancellation, the handler sends `SIGTERM` to the subprocess.
+/// After termination and pipe drainage, `run` throws `CancellationError`.
 ///
 /// ## Timeout
 ///
@@ -64,59 +69,129 @@ public struct SystemProcessRunner: ProcessRunning {
     }
 
     public func run(_ executable: String, arguments: [String]) async throws -> ProcessResult {
+        // Bail before even launching if the parent task is already cancelled.
+        try Task.checkCancellation()
+
         let exec = executable
         let args = arguments
         let timeoutSeconds = timeout
 
-        return try await Task.detached(priority: .userInitiated) { () throws -> ProcessResult in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: exec)
-            process.arguments = args
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exec)
+        process.arguments = args
 
-            var env = ProcessInfo.processInfo.environment
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            process.environment = env
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        process.environment = env
 
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
-            try process.run()
+        let completion = ProcessCompletion()
+        process.terminationHandler = { _ in completion.finish() }
+        try process.run()
 
-            // Set up a timer to kill the process if it exceeds the timeout.
-            // We capture the PID (a plain Int32, which is Sendable) and use an
-            // OSAtomicFlag to communicate between the timer and the main thread.
-            let pid = process.processIdentifier
-            let didTimeout = DidTimeout()
-            var timer: DispatchSourceTimer?
-            if let seconds = timeoutSeconds {
-                let t = DispatchSource.makeTimerSource(queue: .global())
-                t.schedule(deadline: .now() + seconds)
-                t.setEventHandler { [didTimeout] in
-                    didTimeout.set()
-                    kill(pid, SIGTERM)
-                }
-                t.resume()
-                timer = t
+        let pid = process.processIdentifier
+        let didTimeout = DidTimeout()
+
+        // Timeout watchdog: SIGTERM the process if it overruns its budget. The
+        // timer is cancelled in the cleanup path below regardless of how the
+        // wait completes (normal exit, timeout, or cancellation).
+        var timer: DispatchSourceTimer?
+        if let seconds = timeoutSeconds {
+            let t = DispatchSource.makeTimerSource(queue: .global())
+            t.schedule(deadline: .now() + seconds)
+            t.setEventHandler { [didTimeout] in
+                didTimeout.set()
+                kill(pid, SIGTERM)
             }
+            t.resume()
+            timer = t
+        }
 
-            process.waitUntilExit()
-            timer?.cancel()
+        let box = ProcessIOBox(stdout: stdoutPipe, stderr: stderrPipe)
 
-            if didTimeout.value, let seconds = timeoutSeconds {
-                throw ProcessTimedOut(timeout: seconds)
+        let (outData, errData) = await withTaskCancellationHandler {
+            async let stdout = box.readOutput(standardError: false)
+            async let stderr = box.readOutput(standardError: true)
+            await completion.wait()
+            return await (stdout, stderr)
+        } onCancel: {
+            // Foundation makes no guarantees about safe Process access from
+            // arbitrary threads, but `kill(2)` on a captured pid is signal-safe
+            // and that's all this needs.
+            kill(pid, SIGTERM)
+        }
+
+        timer?.cancel()
+
+        // Order matters: a cancellation that races with a timeout should surface
+        // as cancellation (the user's intent), not as a spurious timeout.
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+        if didTimeout.value, let seconds = timeoutSeconds {
+            throw ProcessTimedOut(timeout: seconds)
+        }
+
+        return ProcessResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: outData, encoding: .utf8) ?? "",
+            stderr: String(data: errData, encoding: .utf8) ?? ""
+        )
+    }
+}
+
+/// Each pipe has exactly one reader. The references are immutable; output crosses
+/// queues as Data. Process status is read only after the termination callback.
+private final class ProcessIOBox: @unchecked Sendable {
+    let stdout: Pipe
+    let stderr: Pipe
+    init(stdout: Pipe, stderr: Pipe) {
+        self.stdout = stdout
+        self.stderr = stderr
+    }
+
+    func readOutput(standardError: Bool) async -> Data {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let handle = (standardError ? stderr : stdout).fileHandleForReading
+                let data = (try? handle.readToEnd()) ?? Data()
+                continuation.resume(returning: data)
             }
+        }
+    }
+}
 
-            let outData = ((try? stdoutPipe.fileHandleForReading.readToEnd()) ?? nil) ?? Data()
-            let errData = ((try? stderrPipe.fileHandleForReading.readToEnd()) ?? nil) ?? Data()
+/// The process can exit before the async caller starts waiting. Retain that event
+/// under a lock so either ordering resumes the continuation exactly once.
+private final class ProcessCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var continuation: CheckedContinuation<Void, Never>?
 
-            return ProcessResult(
-                exitCode: process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        }.value
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if finished {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        finished = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume()
     }
 }
 

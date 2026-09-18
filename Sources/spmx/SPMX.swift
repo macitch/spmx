@@ -13,7 +13,7 @@ struct SPMX: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "spmx",
         abstract: "The commands Swift Package Manager forgot to ship.",
-        version: "0.1.1",
+        version: "0.2.0",
         subcommands: [
             AddCommand.self,
             RemoveCommand.self,

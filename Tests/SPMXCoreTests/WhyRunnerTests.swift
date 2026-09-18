@@ -255,45 +255,26 @@ struct WhyRunnerTests {
         #expect(obj?["hadMissingManifests"] as? Bool == false)
     }
 
-    @Test("SwiftPM package with no Package.resolved surfaces packageResolvedNotFound")
-    func noResolvedFile() async throws {
-        // Stage a directory with a Package.swift (so detect() lands on the SwiftPM
-        // branch) but no Package.resolved. This is a real case: a freshly cloned
-        // package that hasn't been resolved yet. The SwiftPM pipeline should fail at
-        // the parser.locate step with `packageResolvedNotFound`.
-        //
-        // Before the Xcode pivot, the check ran on *any* directory so an empty dir
-        // surfaced this same error. Post-pivot, detect() rejects bare directories with
-        // `noProjectOrPackage` first, so `packageResolvedNotFound` is now only
-        // reachable when a Package.swift exists. That's the more useful semantic.
-        let fm = FileManager.default
-        let root = fm.temporaryDirectory
-            .appendingPathComponent("spmx-why-unresolved-\(UUID().uuidString)", isDirectory: true)
-            .resolvingSymlinksInPath()
-        try fm.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: root) }
-
-        // Write a minimal Package.swift so detect() picks the SwiftPM path.
-        let manifest = "// swift-tools-version:5.9\nimport PackageDescription\n"
-        try Data(manifest.utf8).write(to: root.appendingPathComponent("Package.swift"))
-
-        let r = WhyRunner()
-        do {
-            _ = try await r.run(options: .init(
-                path: root.path,
-                target: "whatever",
-                json: false,
-                colorEnabled: false
-            ))
-            Issue.record("expected packageResolvedNotFound, got success")
-        } catch let err as WhyRunner.Error {
-            switch err {
-            case .packageResolvedNotFound:
-                #expect(err.description.contains("No Package.resolved"))
-            default:
-                Issue.record("wrong error: \(err)")
-            }
-        }
+    @Test("local-only graph works without a Package.resolved file")
+    func noResolvedFileForLocalGraph() async throws {
+        let root = try stage(pins: [], checkoutIdentities: [])
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Package.resolved"))
+        let local = root.appendingPathComponent("local", isDirectory: true)
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try Data("// stub".utf8).write(to: local.appendingPathComponent("Package.swift"))
+        let loader = StubManifestLoader(manifests: [
+            root.path: ManifestDump(name: "App", dependencies: [
+                .init(identity: "local", kind: .fileSystem, path: "local"),
+            ]),
+            local.path: dump(name: "Local"),
+        ])
+        let runner = WhyRunner(graphBuilder: GraphBuilder(manifestLoader: loader))
+        let output = try await runner.run(options: .init(
+            path: root.path, target: "local", json: true, colorEnabled: false
+        ))
+        #expect(output.paths == [["app", "local"]])
+        #expect(!output.hadMissingManifests)
     }
 
     @Test("bare directory with no project or package surfaces noProjectOrPackage")

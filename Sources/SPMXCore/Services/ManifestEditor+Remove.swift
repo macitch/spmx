@@ -58,17 +58,18 @@ extension ManifestEditor {
         }
 
         var foundInTopLevel = false
+        var packageNames: Set<String> = [normalizedTarget]
         for element in depsArray.elements {
             guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package",
-                  let urlArg = Self.argument(labeled: "url", in: call),
-                  let url = Self.plainStringLiteral(urlArg.expression) else {
+                  let identity = Self.packageIdentity(from: call) else {
                 continue
             }
-            if XcodePackageReference.identity(forRepositoryURL: url) == normalizedTarget {
+            if identity == normalizedTarget {
                 foundInTopLevel = true
-                break
+                if let nameArg = Self.argument(labeled: "name", in: call),
+                   let name = Self.plainStringLiteral(nameArg.expression) {
+                    packageNames.insert(name.lowercased())
+                }
             }
         }
         guard foundInTopLevel else {
@@ -120,11 +121,11 @@ extension ManifestEditor {
                     guard let (_, pkg) = Self.productNameAndPackage(from: el.expression) else {
                         return false
                     }
-                    return pkg.lowercased() == normalizedTarget
+                    return packageNames.contains(pkg.lowercased())
                 }
                 if hasReference {
                     let swept = Self.removingProducts(
-                        matchingPackage: normalizedTarget,
+                        matchingPackages: packageNames,
                         from: tDepsArray
                     )
                     replacements[tDepsArray.id] = Syntax(swept)
@@ -166,13 +167,10 @@ extension ManifestEditor {
         var targetIndex: Int? = nil
         for (i, element) in array.elements.enumerated() {
             guard let call = element.expression.as(FunctionCallExprSyntax.self),
-                  let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                  member.declName.baseName.text == "package",
-                  let urlArg = Self.argument(labeled: "url", in: call),
-                  let urlString = Self.plainStringLiteral(urlArg.expression) else {
+                  let identity = Self.packageIdentity(from: call) else {
                 continue
             }
-            if XcodePackageReference.identity(forRepositoryURL: urlString) == normalizedTarget {
+            if identity == normalizedTarget {
                 targetIndex = i
                 break
             }

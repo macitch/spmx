@@ -266,6 +266,43 @@ struct VersionFetcherTests {
         #expect(entries.map(\.completed) == [1, 2, 3, 4, 5])
     }
 
+    @Test("parent-task cancellation aborts the fetch promptly and stops adding new work")
+    func cancellationStopsFetch() async throws {
+        // Fake runner that hangs in cooperative Task.sleep until cancelled. With
+        // cancellation wiring, parent-task cancel should cascade into the group's
+        // child tasks (and thus this fake), unblocking sleep and letting fetchOne
+        // return `.fetchFailed("cancelled")`. Without it, latestVersions would
+        // sit forever.
+        let fake = BlockingProcessRunner()
+        let fetcher = GitVersionFetcher(runner: fake, maxConcurrency: 4, cacheTTL: 0)
+        let pins = (0..<20).map { i in
+            makePin(identity: "lib\(i)", url: "https://example.com/lib\(i).git")
+        }
+
+        let start = Date()
+        let task = Task { await fetcher.latestVersions(for: pins) }
+        // Give the group time to spin up.
+        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        task.cancel()
+        let results = await task.value
+        let elapsed = Date().timeIntervalSince(start)
+
+        // The fetch should bail in well under the fake's 10s block.
+        let message = "fetcher should bail soon after cancel (elapsed: \(elapsed)s)"
+        #expect(elapsed < 3.0, Comment(rawValue: message))
+
+        // Not every pin must be present — partial results are fine — but no pin
+        // should report a successful `.found` because the fake never returns one.
+        for (_, result) in results {
+            switch result {
+            case .found:
+                Issue.record("no pin should resolve to .found via the blocking runner")
+            default:
+                break  // .fetchFailed / .noVersionTags / .skipped all acceptable
+            }
+        }
+    }
+
     @Test("onPinComplete is not called for empty pins")
     func progressCallbackNotCalledForEmpty() async {
         let collector = ProgressCollector()
@@ -309,6 +346,17 @@ actor FakeProcessRunner: ProcessRunning {
     func run(_ executable: String, arguments: [String]) async throws -> ProcessResult {
         callCount += 1
         return result
+    }
+}
+
+/// Test double for `ProcessRunning` that hangs in cooperative sleep until cancelled.
+/// Used to exercise cancellation propagation: a parent-task cancel should cascade
+/// into TaskGroup children, unblock the sleep, and surface as `.fetchFailed`.
+actor BlockingProcessRunner: ProcessRunning {
+    func run(_ executable: String, arguments: [String]) async throws -> ProcessResult {
+        // Long enough that the test would time out if cancellation didn't propagate.
+        try await Task.sleep(nanoseconds: 10_000_000_000) // 10s
+        return ProcessResult(exitCode: 0, stdout: "", stderr: "")
     }
 }
 

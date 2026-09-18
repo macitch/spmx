@@ -25,11 +25,9 @@ import SwiftSyntax
 ///     flow; extending it would risk cache-shape drift for those callers
 ///   - `ManifestDump` only decodes `name` and `dependencies`, not `products`
 ///
-/// Instead, `ManifestFetcher` is a narrow, throwaway wrapper that:
-///   1. `git clone --depth 1 <url> <tmpDir>` — shallow, fast, ~1-2s for typical repos
-///   2. `swift package --package-path <tmpDir> dump-package` — parses the manifest Swift code
-///   3. decodes the subset of the JSON we care about (`name` + `products[]`)
-///   4. tears down the tmp dir
+/// Fetches the requested tag, branch, or commit into a temporary checkout, extracts
+/// the package name and products with SwiftSyntax, then removes the checkout.
+/// Version ranges inspect the newest matching tag; an omitted requirement uses default HEAD.
 ///
 /// No caching: this runs once per `spmx add` invocation (the user is already waiting on
 /// network anyway) and the tmp dir is cleaned up on exit.
@@ -76,17 +74,19 @@ public struct ManifestFetcher: Sendable {
         case dumpFailed(stderr: String)
         case decodeFailed(String)
         case filesystemFailed(String)
+        case referenceNotFound(url: String, reference: String)
 
         public var description: String {
             switch self {
+            case .referenceNotFound(let url, let reference):
+                return "No tag matching \(reference) found at \(url). Check the version or use --branch or --revision."
             case .cloneFailed(let url, let stderr):
                 return """
                 Failed to clone \(url):
                 \(stderr)
 
                 Check that the URL is correct and reachable, and that you have credentials \
-                for private repos. To skip metadata discovery, pass `--product <name>` and \
-                spmx will trust your input.
+                for private repos, and that the requested version or ref exists.
                 """
             case .dumpFailed(let stderr):
                 return """
@@ -153,7 +153,10 @@ public struct ManifestFetcher: Sendable {
     /// or plugins (e.g. apple/swift-collections) because dump-package triggers
     /// dependency resolution under the hood. SwiftSyntax parsing is instant, offline,
     /// and never blocks on network I/O.
-    public func fetch(url: String) async throws -> Metadata {
+    public func fetch(
+        url: String,
+        requirement: ManifestEditor.VersionRequirement? = nil
+    ) async throws -> Metadata {
         let fm = FileManager.default
         let workDir = temporaryDirectory
             .appendingPathComponent("spmx-fetch-\(UUID().uuidString)", isDirectory: true)
@@ -167,21 +170,19 @@ public struct ManifestFetcher: Sendable {
         // Best-effort cleanup — any failure here is ignorable noise.
         defer { try? fm.removeItem(at: workDir) }
 
-        // 1. Shallow clone.
-        let cloneResult: ProcessResult
-        do {
-            cloneResult = try await runner.run(
-                envExecutable,
-                arguments: ["git", "clone", "--depth", "1", "--quiet", url, workDir.path]
-            )
-        } catch {
-            throw Error.cloneFailed(url: url, stderr: error.localizedDescription)
-        }
-        guard cloneResult.exitCode == 0 else {
-            throw Error.cloneFailed(
-                url: url,
-                stderr: cloneResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+        // Fetch an explicit ref instead of inspecting the default branch. Using
+        // refs/tags and refs/heads also disambiguates identically named tags/branches.
+        if let requirement {
+            let reference = try await gitReference(for: requirement, url: url)
+            _ = try await git(["init", "--quiet", workDir.path], url: url)
+            _ = try await git([
+                "-C", workDir.path, "fetch", "--depth", "1", "--quiet", "--", url, reference,
+            ], url: url)
+            _ = try await git([
+                "-C", workDir.path, "checkout", "--quiet", "--detach", "FETCH_HEAD",
+            ], url: url)
+        } else {
+            _ = try await git(["clone", "--depth", "1", "--quiet", "--", url, workDir.path], url: url)
         }
 
         // 2. Parse Package.swift with SwiftSyntax (no subprocess needed).
@@ -213,6 +214,72 @@ public struct ManifestFetcher: Sendable {
 
         let products = rawProducts.map { Metadata.Product(name: $0.name, kind: $0.kind) }
         return Metadata(packageName: packageName, products: products)
+    }
+
+    private func gitReference(
+        for requirement: ManifestEditor.VersionRequirement,
+        url: String
+    ) async throws -> String {
+        let version: String
+        switch requirement {
+        case .branch(let branch): return "refs/heads/\(branch)"
+        case .revision(let revision): return revision
+        case .from(let value), .exact(let value), .upToNextMajor(let value), .upToNextMinor(let value):
+            version = value
+        case .range(let lower, _), .closedRange(let lower, _):
+            version = lower
+        }
+
+        let result = try await git(["ls-remote", "--tags", "--refs", "--", url], url: url)
+        let tags = GitVersionFetcher.parseTags(from: result.stdout)
+        guard let lower = Semver(version) else {
+            throw Error.referenceNotFound(url: url, reference: version)
+        }
+        let candidates = tags.compactMap { tag -> (tag: String, version: Semver)? in
+            guard let parsed = Semver(tag), lower.isPrerelease || !parsed.isPrerelease else { return nil }
+            let matches: Bool
+            switch requirement {
+            case .exact:
+                matches = parsed == lower
+            case .from, .upToNextMajor:
+                matches = parsed >= lower && parsed.major == lower.major
+            case .upToNextMinor:
+                matches = parsed >= lower && parsed.major == lower.major && parsed.minor == lower.minor
+            case .range(_, let upper):
+                matches = Semver(upper).map { parsed >= lower && parsed < $0 } ?? false
+            case .closedRange(_, let upper):
+                matches = Semver(upper).map { parsed >= lower && parsed <= $0 } ?? false
+            case .branch, .revision:
+                matches = false // handled above
+            }
+            return matches ? (tag, parsed) : nil
+        }.sorted { lhs, rhs in
+            if lhs.version != rhs.version { return lhs.version > rhs.version }
+            if lhs.tag == rhs.tag { return false }
+            // Prefer the requested spelling when equivalent v/V-prefixed tags exist.
+            if lhs.tag == version { return true }
+            if rhs.tag == version { return false }
+            return lhs.tag < rhs.tag
+        }
+        if let selected = candidates.first {
+            return "refs/tags/\(selected.tag)"
+        }
+        throw Error.referenceNotFound(url: url, reference: String(describing: requirement))
+    }
+
+    private func git(_ arguments: [String], url: String) async throws -> ProcessResult {
+        let result: ProcessResult
+        do {
+            result = try await runner.run(envExecutable, arguments: ["git"] + arguments)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw Error.cloneFailed(url: url, stderr: error.localizedDescription)
+        }
+        guard result.exitCode == 0 else {
+            throw Error.cloneFailed(url: url, stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return result
     }
 
     /// Extract the `name:` argument from the top-level `Package(...)` call.

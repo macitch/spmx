@@ -56,10 +56,10 @@ public struct AddCommand: AsyncParsableCommand {
     @Option(help: "Target to wire the product into. Auto-detected when the package has exactly one non-test target.")
     public var target: String?
 
-    @Option(name: .shortAndLong, help: "Path to the package directory.")
+    @Option(name: .shortAndLong, help: "Path to the package directory or Package.swift file.")
     public var path: String = "."
 
-    @Flag(help: "Print the planned edits without writing to disk.")
+    @Flag(help: "Preview edits without writing Package.swift or resolving. Metadata fetching still runs.")
     public var dryRun: Bool = false
 
     @Flag(help: "Bypass the 24-hour catalog cache and re-fetch the package list.")

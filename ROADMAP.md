@@ -6,16 +6,16 @@ Keep the five dependency commands focused: `add`, `remove`, `outdated`, `why`, a
 
 SwiftPM already provides dependency-addition commands, resolution, updates, and dependency-tree output. spmx's value is combining catalog lookup, version and product selection, target wiring, and dependency inspection. See the [README](README.md) for the current command reference and [CHANGELOG](CHANGELOG.md) for implementation history.
 
-This plan was checked against the source and published releases on **2026-09-20**. Future milestones describe intended work, not features already available or release-date commitments.
+This plan was checked against the source and published releases on **2026-09-22**. Future milestones describe intended work, not features already available or release-date commitments.
 
 ## Current baseline
 
 | Area | Verified status |
 |------|-----------------|
-| Published version | [v0.1.1](https://github.com/macitch/spmx/releases/tag/v0.1.1) is the latest published release at this review. |
-| Next release | The 0.2.0 fixes are merged in [PR #1](https://github.com/macitch/spmx/pull/1); its CI passed. A version change in source does not publish a release. |
-| Installation | The [Homebrew tap](https://github.com/macitch/homebrew-spmx/blob/main/Formula/spmx.rb), a macOS release archive, Mint installation, and source builds already exist. The tap still points to 0.1.1. |
-| CI | [The workflow](.github/workflows/ci.yml) builds and tests on `macos-15` using the runner's selected Swift toolchain. It does not yet verify a toolchain or architecture matrix or publish releases. |
+| Published version | [v0.2.0](https://github.com/macitch/spmx/releases/tag/v0.2.0) is published with a universal macOS archive and SHA-256 checksum. |
+| Source | The release tag points to `ccd0a756ad272e3652e7134bbc8ff4eb38739383`, containing the fixes merged in [PR #1](https://github.com/macitch/spmx/pull/1). Its CI passed. |
+| Installation | The [Homebrew tap](https://github.com/macitch/homebrew-spmx/blob/main/Formula/spmx.rb) now points to 0.2.0. Mint and source installations are also available. |
+| CI | [Source CI](.github/workflows/ci.yml) builds and tests on `macos-15` using the runner's selected Swift toolchain. [Tap CI](https://github.com/macitch/homebrew-spmx/blob/main/.github/workflows/test.yml) installs and smoke-tests the packaged executable on Apple Silicon and Intel macOS 15. A broader toolchain/runtime matrix and automated publication remain planned. |
 
 The current source supports:
 
@@ -30,18 +30,20 @@ Manifest editing and remote product discovery use SwiftSyntax. Graph inspection 
 
 ## v0.2.0 — Deliver the reviewed fixes
 
-**Implementation status: merged; publication pending at this review.**
+**Status: released.**
 
 The merged work fixes subprocess pipe deadlocks, repository-identity wiring, metadata selection at requested references, alias/local-dependency removal, local graph traversal, rollback diagnostics, and concurrent checkout-cache access. It also corrects the README and CLI help. The local validation run passed 380 tests in 52 suites; PR CI passed independently.
 
-Remaining release work:
+Release checklist:
 
-- [ ] Build and test the exact commit selected for release, including `--version` and a local add/remove/why smoke test.
-- [ ] Publish the tag, release notes, macOS artifact, and checksum; verify the artifact's architecture and minimum macOS requirements before advertising them.
-- [ ] Update the Homebrew tap URL/checksum and verify clean Homebrew, Mint, and source installations report the expected version.
-- [ ] Include the SPMXCore migration note: injected `AddRunner.fetchMetadata` closures now receive `(url, requirement)`.
+- [x] Build and test the exact release commit: all 380 tests pass in release mode, and the extracted archive passes `--version` and local add/remove/why smoke tests.
+- [x] Publish the tag, release notes, universal macOS artifact, and checksum. Verify both architecture slices, the code signature, and the declared macOS 13 deployment target.
+- [x] Update the Homebrew tap URL/checksum. Clean Homebrew installations and installed-binary smoke tests pass on Apple Silicon and Intel macOS 15; clean Mint and source installations report 0.2.0.
+- [x] Include the SPMXCore migration note: injected `AddRunner.fetchMetadata` closures now receive `(url, requirement)`.
 
-Do not hold these fixes for new command features. The reliability work below remains explicit follow-up work for subsequent 0.x releases.
+Runtime checks for the release artifact passed on Apple Silicon with macOS 27 and through [Homebrew CI on Apple Silicon and Intel macOS 15](https://github.com/macitch/homebrew-spmx/actions/runs/35542610202). Source CI passed on macOS 15 with Swift 6.1.2. macOS 13 runtime checks remain unverified and are part of the environment-matrix work below. The archive records build-time validation and the dependency lockfile; the binary is ad-hoc signed, not notarized.
+
+The reliability work below remains planned for subsequent 0.x releases.
 
 ## Next 0.x milestone — Close reliability gaps
 

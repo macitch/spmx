@@ -18,7 +18,7 @@ public struct ManifestWriteGuard: Sendable {
     private let envExecutable: String
 
     public init(
-        runner: any ProcessRunning = SystemProcessRunner(),
+        runner: any ProcessRunning = SystemProcessRunner(timeout: SystemProcessRunner.dependencyResolutionTimeout),
         envExecutable: String = "/usr/bin/env"
     ) {
         self.runner = runner

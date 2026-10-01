@@ -71,8 +71,7 @@ public final class XcodeCheckoutLocator: @unchecked Sendable {
     /// `@unchecked Sendable` on the enclosing class is honest only because every
     /// access to this dictionary goes through `cacheLock`. Bypass the lock and the
     /// next concurrent caller (e.g. a `TaskGroup` doing parallel pin lookups) will
-    /// corrupt it silently. The lock is `os_unfair_lock` — same pattern as
-    /// `DidTimeout` in `ProcessRunner.swift`.
+    /// corrupt it silently. The lock is `os_unfair_lock`.
     private var derivedDataCache: [String: URL?] = [:]
     private var cacheLock = os_unfair_lock()
 

@@ -2,6 +2,17 @@
 
 All notable changes to [`spmx`](https://github.com/macitch/spmx) are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Bound subprocess shutdown on timeout and task cancellation: signal an isolated process group, escalate to SIGKILL after one second, and limit final output drainage to 250 ms.
+- Report an output-drain timeout when descendants keep pipes open after the command exits, instead of hanging or returning incomplete output as success.
+
+### Changed
+
+- Allow 10 minutes for dependency resolution in `add` and `remove`; metadata subprocesses retain their 30-second limit.
+
 ## [0.2.0] — 2026-09-18
 
 ### Fixed

@@ -253,6 +253,12 @@ Package name resolution uses the [Swift Package Index](https://swiftpackageindex
 
 Use `--dry-run` to preview edits without writing the manifest or resolving, or `--no-resolve` to write the manifest and handle resolution yourself. A dry-run of `add` still fetches metadata and can update caches and create temporary files.
 
+### Subprocess limits
+
+Metadata subprocesses have a 30-second execution limit. The default `swift package resolve` step in `add` and `remove` has a 10-minute limit to allow for dependency downloads. Resolution failure, including timeout, triggers the manifest rollback described above.
+
+On timeout or task cancellation, spmx asks the subprocess group to terminate, allows one second for graceful shutdown, then force-stops the group. It waits at most another 250 ms for remaining output. If a command exits but its output pipes stay open for more than one second, spmx applies the same shutdown policy and reports that output may be incomplete. Descendants that deliberately detach from the group cannot be stopped through that group, but their pipes cannot keep spmx waiting indefinitely.
+
 ## Caveats
 
 **Manifest editing supports literal declarations.** Dependency and target arrays built with variables, helper functions, or conditional compilation are not supported; detected unsupported shapes are rejected. `add` and `remove` edit `Package.swift`, not Xcode project files.

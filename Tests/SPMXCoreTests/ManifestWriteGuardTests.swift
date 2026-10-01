@@ -59,6 +59,21 @@ struct ManifestWriteGuardTests {
 
     // MARK: - Tests
 
+    @Test("default dependency resolution can exceed the 30-second metadata budget")
+    func slowResolution() async throws {
+        let url = try stageManifest(originalManifest)
+        defer { cleanup(url) }
+        let resolver = url.deletingLastPathComponent().appendingPathComponent("slow-resolver")
+        // This exercises the real default runner, not a fake that ignores deadlines.
+        // exec makes the old 30-second policy terminate sleep and revert the edit.
+        try "#!/bin/sh\nexec /bin/sleep 31\n".write(to: resolver, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolver.path)
+        let editor = try ManifestEditor.parse(source: editedManifest)
+        try await ManifestWriteGuard(envExecutable: resolver.path).writeAndResolve(editor: editor, to: url)
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        #expect(contents == editor.serialize())
+    }
+
     @Test("successful resolve keeps the edited manifest")
     func successfulResolve() async throws {
         let url = try stageManifest(originalManifest)
